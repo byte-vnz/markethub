@@ -136,7 +136,8 @@ class RecordController extends Controller
         }
         $spec = Resources::get($type);
         $this->authorize($spec["permission"] . ".manage");
-        $record = new ($spec["model"])();
+        $modelClass = $spec["model"];
+        $record = new $modelClass();
         if (in_array($type, ['sections', 'stalls'], true) && is_numeric(request('market_id'))) {
             $record->market_id = (int) request('market_id');
         }
@@ -224,9 +225,10 @@ class RecordController extends Controller
             } elseif (isset($d["market_id"])) {
                 Market::whereKey($d["market_id"])->lockForUpdate()->firstOrFail();
             }
+            $modelClass = $spec["model"];
             $m = $id
                 ? $spec["model"]::whereKey($id)->lockForUpdate()->firstOrFail()
-                : new ($spec["model"])();
+                : new $modelClass();
             $old = $m->getAttributes();
             if ($id) {
                 $this->authorize("update", $m);

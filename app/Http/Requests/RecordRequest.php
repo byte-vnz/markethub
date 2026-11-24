@@ -36,7 +36,8 @@ class RecordRequest extends FormRequest
                 $rules[$field] = "nullable|date_format:Y-m-d";
             }
             if ($meta[1] === "relation") {
-                $model = new ($meta[2])();
+                $modelClass = $meta[2];
+                $model = new $modelClass();
                 $rules[$field] = "nullable|integer|exists:" . $model->getTable() . ",id";
             }
             if ($meta[1] === "select") {

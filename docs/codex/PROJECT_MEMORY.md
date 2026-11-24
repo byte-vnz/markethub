@@ -84,3 +84,7 @@ The project-wide implementation brief explicitly requires approval of the Superp
 ## Frontend modernization implementation — 2026-11-20
 
 The user approved the frontend modernization design. Implementation keeps Blade, Tailwind and the existing JavaScript libraries. Preserve the single permission-filtered sidebar, native no-script links and sign out, explicit drawer focus, matching submitter confirmation, scoped safe form recovery and named scroll areas. Chart.js appears only on Dashboard. Help loads its first allowlisted figure eagerly and defers later images. Legacy rates batch the market lookup. The project builds operator manual v1.3 from the existing authoring pipeline.
+
+## PHP 7.4 production parse error — 2026-11-24
+
+The production screenshot identified PHP 8-only parenthesized dynamic class construction in RecordController. Replaced all three application occurrences in RecordController (create/save) and RecordRequest (relation validation) with class-name variables. The existing parser's version target is best-effort; scripts/check-php74.php now explicitly rejects this syntax and no longer labels its result as a strict grammar check. See docs/operations/PHP74_PARSE_ERROR.md for operator commands and debug-display precautions. No data/schema/permission/UI workflow change; manuals and exports do not require rebuilding for this syntax-only correction. Native PHP 7.4 and production verification remain operator tasks.
