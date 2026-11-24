@@ -1,0 +1,1 @@
+module.exports = { safelist: ['status-occupied','status-vacant','status-reserved','status-maintenance','status-inactive'], content: ['./resources/views/**/*.blade.php','./resources/js/**/*.js'], theme: {extend:{colors:{navy:'#11253f',brand:'#1d67d7'}}}, plugins: [] };

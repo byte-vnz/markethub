@@ -1,0 +1,4 @@
+@extends('layouts.app')
+@section('title','Reports')
+@section('subtitle','Filtered, transaction-derived reports with CSV, Excel, PDF and print views.')
+@section('content')<section class="panel"><div class="divide-y">@foreach($types as $key=>$spec)@can($spec[1])<div class="py-4 flex flex-wrap items-center justify-between gap-4"><h2>{{ $spec[0] }}</h2>@if($key==='tenant-statement')<form method="get" action="{{ route('reports.show',$key) }}" class="toolbar"><div><label for="statement-tenant" class="sr-only">Tenant ID</label><input id="statement-tenant" name="tenant_id" type="number" min="1" placeholder="Tenant ID" required></div><button class="btn secondary">Open statement</button></form>@else<a class="btn secondary" href="{{ route('reports.show',$key) }}">Open report<span class="sr-only"> for {{ $spec[0] }}</span></a>@endif</div>@endcan @endforeach</div></section>@endsection

@@ -1,0 +1,17 @@
+flowchart TD
+    N0["Draft officer: Select an active assessed assignment and approved template. Enter lease dates."]
+    N0 -->|Validation fails| F0["Renew a legacy assignment before preparing an assessed contract."]
+    N1["Generating officer: Verify current tenant identity, ID and authorized assignment helpers."]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Resolve incomplete identity, template or checksum checks."]
+    N2["Application: Freeze current identity and helpers with assessed trade and rental terms. Store original DOCX."]
+    N1 --> N2
+    N3["Authorized reviewer: Compare original and generated pages. Record actual visual review."]
+    N2 --> N3
+    N4["Issuing officer: Check approved numbering, rental and advance/deposit authority before issue."]
+    N3 --> N4
+    N4 -->|Validation fails| F4["Keep the contract ready when issuance authority is incomplete."]
+    N5["Authorized uploader: Upload the executed signed copy."]
+    N4 --> N5
+    N6["Issuing officer: Activate within eligible dates and active occupancy."]
+    N5 --> N6

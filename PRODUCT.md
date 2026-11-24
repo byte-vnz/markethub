@@ -1,0 +1,2 @@
+# MarketHub
+Internal LGU market operations system for administrators, market staff, collectors, Treasury reviewers and management. Core task: authenticated staff find a stall, maintain its tenant/assignment, generate authorized bills and record traceable payments. Multiple markets, PHP currency, Asia/Manila. MySQL-backed transactions; no browser-only database. See docs/MASTER_SPEC.md for complete scope.

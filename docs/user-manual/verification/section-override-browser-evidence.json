@@ -1,0 +1,87 @@
+{
+    "captured_at": "2026-11-19T21:11:55+08:00",
+    "training_only": true,
+    "counts": {
+        "market_sections": 3,
+        "stalls": 4,
+        "tenants": 1,
+        "businesses": 1,
+        "stall_assignments": 1,
+        "rental_overrides": 2,
+        "rental_assessments": 2,
+        "rental_bills": 0,
+        "payments": 0,
+        "lease_contracts": 1
+    },
+    "layout_sha256": "59a3077c49b1d7f4725c2b33bc31db2c1275c420f2481457acbd82682fc1d3b4",
+    "sections": [
+        {
+            "id": 1,
+            "code": "A",
+            "name": "Fictional Fresh Produce Hall",
+            "description": "Synthetic training section; no real stall inventory.",
+            "color": "#2366AC",
+            "sort_order": 2,
+            "status": "active"
+        },
+        {
+            "id": 2,
+            "code": "Z",
+            "name": "Fictional Retired Hall",
+            "description": "Synthetic inactive master retained for history.",
+            "color": null,
+            "sort_order": 3,
+            "status": "inactive"
+        },
+        {
+            "id": 3,
+            "code": "B",
+            "name": "Fictional Service Hall",
+            "description": "Fictional section created through the actual interface for training.",
+            "color": "#8C6B32",
+            "sort_order": 1,
+            "status": "active"
+        }
+    ],
+    "overrides": [
+        {
+            "id": 1,
+            "stall_assignment_id": 1,
+            "override_type": "rate_per_sqm",
+            "automatic_daily_rental": 268.8,
+            "proposed_daily_rental": 250,
+            "rental_difference": -18.8,
+            "status": "revoked",
+            "requested_by": 2,
+            "approved_by": 1,
+            "effective_from": "2026-12-01",
+            "effective_until": "2027-11-30",
+            "revocation_effective_from": "2027-01-01"
+        },
+        {
+            "id": 2,
+            "stall_assignment_id": 1,
+            "override_type": "daily_amount",
+            "automatic_daily_rental": 268.8,
+            "proposed_daily_rental": 200,
+            "rental_difference": -68.8,
+            "status": "rejected",
+            "requested_by": 2,
+            "approved_by": null,
+            "effective_from": "2027-01-01",
+            "effective_until": "2027-11-30",
+            "revocation_effective_from": null
+        }
+    ],
+    "contracts": [
+        {
+            "id": 1,
+            "control_number": "SPPM-2026-11-000001",
+            "status": "void",
+            "daily_rental": 250,
+            "monthly_rental": 7750,
+            "rental_assessment_id": 2,
+            "docx_checksum": "c2d1041ce8157a36b603e047356343fdebe533f21405aa68096a0bc7c3fdd0a8"
+        }
+    ]
+}

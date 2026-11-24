@@ -1,0 +1,1142 @@
+Changed files (7):
+resources/views/records/show.blade.php
+resources/views/sections/show.blade.php
+resources/views/stalls/assignment-summary.blade.php
+resources/views/stalls/index.blade.php
+resources/views/tenants/index.blade.php
+tests/Feature/RentalOverrideWorkflowTest.php
+tests/Feature/SectionManagementTest.php
+
+File comparison review package (no Git repository). Base: .qa\sections-overrides-checkpoint\after-task-final.zip
+--- before/resources/views/records/show.blade.php
++++ after/resources/views/records/show.blade.php
+@@ -1,4 +1,4 @@
+ @extends('layouts.app')
+ @section('title',$record->name ?: ($record->code ?: $spec['label']))
+ @section('actions')@can('update',$record)<a class="btn" href="{{ route('records.edit',[$type,$record->id]) }}">Edit record</a>@endcan @endsection
+-@section('content')<section class="panel max-w-4xl"><dl>@foreach($spec['fields'] as $key=>$meta)<div class="detailrow"><dt>{{ $meta[0] }}</dt><dd>@if($meta[1]==='relation'){{ optional($meta[2]::find($record->$key))->name ?: '—' }}@else{{ $key==='location_type' ? ($record->location_type ? ucfirst($record->location_type) : 'Unclassified') : ($record->$key ?: '—') }}@endif</dd></div>@endforeach</dl></section>@if($type==='tenants')<section class="panel mt-5"><h2>Businesses and assignment history</h2><div class="flex flex-wrap gap-3 my-4">@foreach($record->businesses as $business)<a class="btn secondary" href="{{ route('records.show',['businesses',$business->id]) }}">{{ $business->name }}</a>@endforeach</div>@foreach($record->assignments()->with('stall','agreement')->latest('start_date')->get() as $a)<div class="detailrow"><dt>{{ $a->stall->code }} · {{ $a->status }}<br>{{ $a->start_date }} – {{ $a->end_date ?: 'Ongoing' }}</dt><dd>{{ optional($a->agreement)->reference }}<br>PHP {{ number_format((float)optional($a->agreement)->monthly_amount,2) }} / month</dd></div>@endforeach<div class="flex flex-wrap gap-3 mt-5">@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$record->id]) }}">Billing history</a><a class="btn secondary" href="{{ route('receivables',['tenant_id'=>$record->id]) }}">Outstanding balances</a>@endcan @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['tenant_id'=>$record->id]) }}">Payments</a>@endcan @can('reports.personal')<a class="btn secondary" href="{{ route('reports.show',['type'=>'tenant-statement','tenant_id'=>$record->id]) }}">Statement of account</a>@endcan</div></section>@endif @if($type==='stalls')@include('stalls.assignment-summary',['assignment'=>$record->currentAssignment])<a class="btn secondary mt-5" href="{{ route('map',['market_id'=>$record->market_id]) }}">View on market map</a>@can('assignments.view')<a class="btn secondary mt-5" href="{{ route('assignments.index',['stall_id'=>$record->id]) }}">Assignment history</a>@endcan @endif @endsection
++@section('content')<section class="panel max-w-4xl"><dl>@foreach($spec['fields'] as $key=>$meta)<div class="detailrow"><dt>{{ $meta[0] }}</dt><dd>@if($meta[1]==='relation')@php($relatedName = optional($meta[2]::find($record->$key))->name){{ $relatedName !== null && $relatedName !== '' ? $relatedName : '—' }}@else{{ $key==='location_type' ? ($record->location_type ? ucfirst($record->location_type) : 'Unclassified') : ($record->$key ?: '—') }}@endif</dd></div>@endforeach</dl></section>@if($type==='tenants')<section class="panel mt-5"><h2>Businesses and assignment history</h2><div class="flex flex-wrap gap-3 my-4">@foreach($record->businesses as $business)<a class="btn secondary" href="{{ route('records.show',['businesses',$business->id]) }}">{{ $business->name }}</a>@endforeach</div>@foreach($record->assignments()->with('stall','agreement')->latest('start_date')->get() as $a)<div class="detailrow"><dt>{{ $a->stall->code }} · {{ $a->status }}<br>{{ $a->start_date }} – {{ $a->end_date ?: 'Ongoing' }}</dt><dd>{{ optional($a->agreement)->reference }}<br>PHP {{ number_format((float)optional($a->agreement)->monthly_amount,2) }} / month</dd></div>@endforeach<div class="flex flex-wrap gap-3 mt-5">@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$record->id]) }}">Billing history</a><a class="btn secondary" href="{{ route('receivables',['tenant_id'=>$record->id]) }}">Outstanding balances</a>@endcan @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['tenant_id'=>$record->id]) }}">Payments</a>@endcan @can('reports.personal')<a class="btn secondary" href="{{ route('reports.show',['type'=>'tenant-statement','tenant_id'=>$record->id]) }}">Statement of account</a>@endcan</div></section>@endif @if($type==='stalls')@include('stalls.assignment-summary',['assignment'=>$record->currentAssignment])<a class="btn secondary mt-5" href="{{ route('map',['market_id'=>$record->market_id]) }}">View on market map</a>@can('assignments.view')<a class="btn secondary mt-5" href="{{ route('assignments.index',['stall_id'=>$record->id]) }}">Assignment history</a>@endcan @endif @endsection
+--- before/resources/views/sections/show.blade.php
++++ after/resources/views/sections/show.blade.php
+@@ -1,29 +1,29 @@
+-@extends('layouts.app')
+-@section('title',$record->name)
+-@section('subtitle',$record->market->name.' · '.$record->code)
+-@section('actions')
+-    @can('update',$record)<a class="btn" href="{{ route('records.edit',['sections',$record->id]) }}">Edit section</a>@endcan
+-@endsection
+-@section('content')
+-<section class="panel max-w-3xl">
+-    <h2>Section details</h2>
+-    <dl>
+-        <div class="detailrow"><dt>Status</dt><dd>{{ ucfirst($record->status) }}</dd></div>
+-        <div class="detailrow"><dt>Display order</dt><dd>{{ $record->sort_order }}</dd></div>
+-        <div class="detailrow"><dt>Map label color</dt><dd class="flex items-center gap-2">@include('sections.swatch',['section'=>$record]){{ $record->color ?: 'None' }}</dd></div>
+-        @if($record->description)<div class="detailrow"><dt>Description</dt><dd class="whitespace-pre-line">{{ $record->description }}</dd></div>@endif
+-    </dl>
+-    <h2 class="mt-6">Stalls in this section</h2>
+-    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 mt-2">
+-        <div class="detailrow"><dt>Total</dt><dd>{{ $record->stalls_count }}</dd></div>
+-        @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
+-            <div class="detailrow"><dt>{{ ucfirst($status) }}</dt><dd>{{ $record->{$status.'_count'} }}</dd></div>
+-        @endforeach
+-    </dl>
+-    <div class="flex flex-wrap gap-3 mt-6">
+-        @can('stalls.view')<a class="btn secondary" href="{{ route('records.index',['type'=>'stalls','market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View stalls</a>@endcan
+-        @can('map.view')<a class="btn secondary" href="{{ route('map',['market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View on market map</a>@endcan
+-        <a class="btn secondary" href="{{ route('records.index',['type'=>'sections','market_id'=>$record->market_id]) }}">Back to sections</a>
+-    </div>
+-</section>
+-@endsection
++@extends('layouts.app')
++@section('title',$record->name)
++@section('subtitle',$record->market->name.' · '.$record->code)
++@section('actions')
++    @can('update',$record)<a class="btn" href="{{ route('records.edit',['sections',$record->id]) }}">Edit section</a>@endcan
++@endsection
++@section('content')
++<section class="panel max-w-3xl">
++    <h2>Section details</h2>
++    <dl>
++        <div class="detailrow"><dt>Status</dt><dd>{{ ucfirst($record->status) }}</dd></div>
++        <div class="detailrow"><dt>Display order</dt><dd>{{ $record->sort_order }}</dd></div>
++        <div class="detailrow"><dt>Map label color</dt><dd class="flex items-center gap-2">@include('sections.swatch',['section'=>$record]){{ $record->color ?: 'None' }}</dd></div>
++        @if($record->description !== null && $record->description !== '')<div class="detailrow"><dt>Description</dt><dd class="whitespace-pre-line">{{ $record->description }}</dd></div>@endif
++    </dl>
++    <h2 class="mt-6">Stalls in this section</h2>
++    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 mt-2">
++        <div class="detailrow"><dt>Total</dt><dd>{{ $record->stalls_count }}</dd></div>
++        @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
++            <div class="detailrow"><dt>{{ ucfirst($status) }}</dt><dd>{{ $record->{$status.'_count'} }}</dd></div>
++        @endforeach
++    </dl>
++    <div class="flex flex-wrap gap-3 mt-6">
++        @can('stalls.view')<a class="btn secondary" href="{{ route('records.index',['type'=>'stalls','market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View stalls</a>@endcan
++        @can('map.view')<a class="btn secondary" href="{{ route('map',['market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View on market map</a>@endcan
++        <a class="btn secondary" href="{{ route('records.index',['type'=>'sections','market_id'=>$record->market_id]) }}">Back to sections</a>
++    </div>
++</section>
++@endsection
+--- before/resources/views/stalls/assignment-summary.blade.php
++++ after/resources/views/stalls/assignment-summary.blade.php
+@@ -1,12 +1,15 @@
+-@if($assignment)
+-<section class="panel mt-5 max-w-4xl"><h2>Current assignment</h2><dl>
+-@can('tenants.view')<div class="detailrow"><dt>Current tenant / business</dt><dd><a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}</dd></div><div class="detailrow"><dt>Current business category</dt><dd>{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</dd></div>@endcan
+-@can('billing.view')
+-@php($assessment=$assignment->agreement ? $assignment->agreement->assessment : null)
+-@if($assessment)
+-@foreach(['period'=>'Assessment reference month','business_category_name'=>'Assessed business category','location_type'=>'Assessed location','floor_area'=>'Assessed area (sq. m.)','rental_rate_sqm'=>'Applied daily rate per sq. m. (PHP)','daily_rental'=>'Daily base rent (PHP)','monthly_rental'=>'Reference monthly base rent (PHP)','monthly_cusa'=>'Reference monthly CUSA (PHP)','total_monthly_rental_cusa'=>'Reference monthly total (PHP)'] as $key=>$label)<div class="detailrow"><dt>{{ $label }}</dt><dd>{{ $assessment->$key }}</dd></div>@endforeach
+-<p class="text-xs text-slate-600 mt-3">These are the agreed assessment values. Later stall or category edits apply through authorized renewal.</p>
+-@elseif($assignment->agreement)<div class="detailrow"><dt>Legacy monthly agreement</dt><dd>PHP {{ $assignment->agreement->monthly_amount }}</dd></div>@endif
+-@endcan
+-</dl></section>
+-@endif
++@if($assignment)
++<section class="panel mt-5 max-w-4xl"><h2>Current assignment</h2><dl>
++@can('tenants.view')<div class="detailrow"><dt>Current tenant / business</dt><dd><a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}</dd></div><div class="detailrow"><dt>Current business category</dt><dd>{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</dd></div>@endcan
++@can('billing.view')
++@php($assessment=$assignment->agreement ? $assignment->agreement->assessment : null)
++@if($assessment)
++@foreach(['period'=>'Assessment reference month','business_category_name'=>'Assessed business category','location_type'=>'Assessed location','floor_area'=>'Assessed area (sq. m.)','rental_rate_sqm'=>'Initial assessed daily rate per sq. m. (PHP)','daily_rental'=>'Initial assessed daily base rent (PHP)','monthly_rental'=>'Reference monthly base rent (PHP)','monthly_cusa'=>'Reference monthly CUSA (PHP)','total_monthly_rental_cusa'=>'Reference monthly total (PHP)'] as $key=>$label)<div class="detailrow"><dt>{{ $label }}</dt><dd>{{ $assessment->$key }}</dd></div>@endforeach
++<p class="text-xs text-slate-600 mt-3">These values come from the initial assessment.</p>
++@can('view',$assignment->tenant)
++<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id,'tab'=>'rental']) }}">View Rental Information</a>
++@endcan
++@elseif($assignment->agreement)<div class="detailrow"><dt>Legacy monthly agreement</dt><dd>PHP {{ $assignment->agreement->monthly_amount }}</dd></div>@endif
++@endcan
++</dl></section>
++@endif
+--- before/resources/views/stalls/index.blade.php
++++ after/resources/views/stalls/index.blade.php
+@@ -1,28 +1,28 @@
+-@extends('layouts.app')
+-@section('title','Stall Management')
+-@section('subtitle','Maintain physical stalls and verified locations. Agreed rental values remain in their historical assessments.')
+-@section('actions')@can('stalls.manage')<a class="btn" href="{{ route('records.create',['type'=>'stalls','market_id'=>request('market_id')]) }}">Add stall</a>@endcan @endsection
+-@section('content')
+-<div class="flex flex-wrap gap-3 mb-4"><a class="btn secondary" href="{{ route('records.index','categories') }}">Physical categories</a>@can('sections.view')<a class="btn secondary" href="{{ route('records.index','sections') }}">Market sections</a>@endcan @can('map.view')<a class="btn secondary" href="{{ route('map') }}">Open market layout</a>@endcan</div>
+-<section class="panel">
+-<form method="get" class="toolbar mb-5">
+-<div><label for="q">Stall code</label><input id="q" name="q" maxlength="100" value="{{ request('q') }}" placeholder="Search stall code"></div>
+-<div><label for="market_id">Market</label><select id="market_id" name="market_id" data-clear-section-filter="section_id"><option value="">All markets</option>@foreach($stallMarkets as $market)<option value="{{ $market->id }}" @if(request('market_id')==$market->id)selected @endif>{{ $market->name }}</option>@endforeach</select></div>
+-<div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>@foreach($stallSections as $section)<option value="{{ $section->id }}" @if(request('section_id')==$section->id)selected @endif>{{ $section->name }} · {{ $section->market->name }}@if($section->status==='inactive') (Inactive)@endif</option>@endforeach</select></div>
+-<div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+-@can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan
+-<div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+-<button class="btn secondary">Apply filters</button><a class="text-sm underline py-3" href="{{ route('records.index','stalls') }}">Clear</a>
+-</form>
+-<div class="tablewrap"><table><thead><tr><th>Stall / section</th><th>Area / location</th><th>Occupancy</th>@can('tenants.view')<th>Tenant / business</th>@endcan @can('billing.view')<th>Agreed rental</th>@endcan<th>Actions</th></tr></thead><tbody>
+-@forelse($records as $record)
+-@php($assignment=$record->currentAssignment)
+-@php($assessment=$assignment && $assignment->agreement ? $assignment->agreement->assessment : null)
+-<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?? 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
+-@can('tenants.view')<td>@if($assignment)<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}<div class="text-xs text-slate-600">{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</div>@else<span class="text-slate-500">Unassigned</span>@endif</td>@endcan
+-@can('billing.view')<td>@if($assessment)<span>PHP {{ $assessment->rental_rate_sqm }} / sq. m. / day</span><br>PHP {{ $assessment->daily_rental }} daily<div class="text-xs text-slate-600">{{ ucfirst($assessment->location_type) }} assessment · {{ $assessment->period }}</div>@elseif($assignment && $assignment->agreement)<span>PHP {{ $assignment->agreement->monthly_amount }} / month</span><div class="text-xs text-slate-600">Legacy agreement</div>@else<span class="text-slate-500">No assessment</span>@endif</td>@endcan
+-<td><div class="flex flex-wrap gap-3"><a class="text-blue-800 underline" href="{{ route('records.show',['stalls',$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['stalls',$record->id]) }}">Edit</a>@endcan</div></td></tr>
+-@empty<tr><td colspan="6" class="empty">No stalls match these filters.</td></tr>@endforelse
+-</tbody></table></div><div class="mt-5">{{ $records->links() }}</div>
+-</section>
+-@endsection
++@extends('layouts.app')
++@section('title','Stall Management')
++@section('subtitle','Maintain physical stalls and verified locations. Agreed rental values remain in their historical assessments.')
++@section('actions')@can('stalls.manage')<a class="btn" href="{{ route('records.create',['type'=>'stalls','market_id'=>request('market_id')]) }}">Add stall</a>@endcan @endsection
++@section('content')
++<div class="flex flex-wrap gap-3 mb-4"><a class="btn secondary" href="{{ route('records.index','categories') }}">Physical categories</a>@can('sections.view')<a class="btn secondary" href="{{ route('records.index','sections') }}">Market sections</a>@endcan @can('map.view')<a class="btn secondary" href="{{ route('map') }}">Open market layout</a>@endcan</div>
++<section class="panel">
++<form method="get" class="toolbar mb-5">
++<div><label for="q">Stall code</label><input id="q" name="q" maxlength="100" value="{{ request('q') }}" placeholder="Search stall code"></div>
++<div><label for="market_id">Market</label><select id="market_id" name="market_id" data-clear-section-filter="section_id"><option value="">All markets</option>@foreach($stallMarkets as $market)<option value="{{ $market->id }}" @if(request('market_id')==$market->id)selected @endif>{{ $market->name }}</option>@endforeach</select></div>
++<div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>@foreach($stallSections as $section)<option value="{{ $section->id }}" @if(request('section_id')==$section->id)selected @endif>{{ $section->name }} · {{ $section->market->name }}@if($section->status==='inactive') (Inactive)@endif</option>@endforeach</select></div>
++<div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
++@can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan
++<div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
++<button class="btn secondary">Apply filters</button><a class="text-sm underline py-3" href="{{ route('records.index','stalls') }}">Clear</a>
++</form>
++<div class="tablewrap"><table><thead><tr><th>Stall / section</th><th>Area / location</th><th>Occupancy</th>@can('tenants.view')<th>Tenant / business</th>@endcan @can('billing.view')<th>Initial assessment / legacy rent</th>@endcan<th>Actions</th></tr></thead><tbody>
++@forelse($records as $record)
++@php($assignment=$record->currentAssignment)
++@php($assessment=$assignment && $assignment->agreement ? $assignment->agreement->assessment : null)
++<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?? 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
++@can('tenants.view')<td>@if($assignment)<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}<div class="text-xs text-slate-600">{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</div>@else<span class="text-slate-500">Unassigned</span>@endif</td>@endcan
++@can('billing.view')<td>@if($assessment)<span>PHP {{ $assessment->rental_rate_sqm }} / sq. m. / day</span><br>PHP {{ $assessment->daily_rental }} daily<div class="text-xs text-slate-600">{{ ucfirst($assessment->location_type) }} · Reference month {{ $assessment->period }}</div>@elseif($assignment && $assignment->agreement)<span>PHP {{ $assignment->agreement->monthly_amount }} / month</span><div class="text-xs text-slate-600">Legacy agreement</div>@else<span class="text-slate-500">No assessment</span>@endif</td>@endcan
++<td><div class="flex flex-wrap gap-3"><a class="text-blue-800 underline" href="{{ route('records.show',['stalls',$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['stalls',$record->id]) }}">Edit</a>@endcan</div></td></tr>
++@empty<tr><td colspan="6" class="empty">No stalls match these filters.</td></tr>@endforelse
++</tbody></table></div><div class="mt-5">{{ $records->links() }}</div>
++</section>
++@endsection
+--- before/resources/views/tenants/index.blade.php
++++ after/resources/views/tenants/index.blade.php
+@@ -1,93 +1,93 @@
+-@extends('layouts.app')
+-@section('title','Tenant Management')
+-@section('subtitle','Search stallholders, businesses and assignment records.')
+-@section('actions')
+-    @can('tenants.manage')<a class="btn" href="{{ route('records.create','tenants') }}">Register tenant</a>@endcan
+-@endsection
+-@section('content')
+-<div class="flex flex-wrap gap-3 mb-4">
+-    <a class="btn secondary" href="{{ route('tenant-businesses.index') }}">Search businesses</a>
+-    @can('reports.personal')<a class="btn secondary" href="{{ route('reports.show','tenant-master') }}">Stallholder masterlist</a>@endcan
+-</div>
+-<section class="panel" aria-label="Tenant list">
+-    <form class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-5" method="get">
+-        <div class="sm:col-span-2"><label for="q">Tenant, business, stall, account or contact</label><input type="search" id="q" name="q" value="{{ request('q') }}" maxlength="100"></div>
+-        <div><label for="status">Tenant status</label><select id="status" name="status"><option value="">All statuses</option>@foreach($tenantStatuses as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+-        <div><label for="stall">Stall code</label><input id="stall" name="stall" value="{{ request('stall') }}" maxlength="40"></div>
+-        @foreach(['business_category_id'=>['Business category',$businessCategories],'category_id'=>['Physical stall category',$categories],'market_id'=>['Market',$markets]] as $field=>[$label,$options])
+-            <div><label for="{{ $field }}">{{ $label }}</label><select id="{{ $field }}" name="{{ $field }}"><option value="">All</option>@foreach($options as $option)<option value="{{ $option->id }}" @if(request($field)==$option->id)selected @endif>{{ $option->name }}</option>@endforeach</select></div>
+-        @endforeach
+-        <div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>
+-            @foreach($sections as $section)
+-                <option value="{{ $section->id }}" @if(request('section_id') == $section->id) selected @endif>{{ $markets->firstWhere('id',$section->market_id)->name ?? 'Unknown market' }} · {{ $section->name }}@if($section->status === 'inactive') (Inactive)@endif</option>
+-            @endforeach
+-        </select></div>
+-        <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner','outer','unclassified'] as $location)<option value="{{ $location }}" @if(request('location_type')===$location)selected @endif>{{ ucfirst($location) }}</option>@endforeach</select></div>
+-        @can('billing.view')
+-            <div><label for="payment_status">Payment status</label><select id="payment_status" name="payment_status"><option value="">All payment statuses</option>@foreach(['overdue'=>'Overdue','outstanding'=>'Outstanding (including overdue)','settled'=>'Settled','unbilled'=>'Unbilled'] as $value=>$label)<option value="{{ $value }}" @if(request('payment_status')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+-        @endcan
+-        @can('contracts.view')
+-            <div><label for="lease_status">Lease status</label><select id="lease_status" name="lease_status"><option value="">All lease statuses</option>@foreach($leaseStatuses as $status=>$label)<option value="{{ $status }}" @if(request('lease_status')===$status)selected @endif>{{ $label }}</option>@endforeach</select></div>
+-        @endcan
+-        <div class="flex flex-wrap items-end gap-2"><button type="submit" class="btn secondary">Filter</button><a class="btn secondary" href="{{ route('records.index','tenants') }}">Clear</a></div>
+-    </form>
+-    <div class="tablewrap"><table>
+-        <thead><tr><th scope="col">Stallholder</th><th scope="col">Businesses</th><th scope="col">Active stalls</th>
+-            @can('billing.view')<th scope="col">Rental and balance</th>@endcan
+-            @can('payments.view')<th scope="col">Latest payment</th>@endcan
+-            @can('contracts.view')<th scope="col">Latest lease</th>@endcan
+-            <th scope="col">Status</th><th scope="col">Actions</th>
+-        </tr></thead>
+-        <tbody>
+-            @forelse($records as $record)
+-                <tr>
+-                    <td>
+-                        <a class="font-semibold text-blue-800 underline" href="{{ route('records.show',['tenants',$record->id]) }}">{{ $record->name }}</a>
+-                        <div class="text-xs text-slate-600 mt-1">{{ $record->reference }}</div>
+-                        @if($record->present_account_number || $record->phone)<div class="text-xs text-slate-600 mt-1">{{ implode(' · ', array_filter([$record->present_account_number,$record->phone])) }}</div>@endif
+-                    </td>
+-                    <td>
+-                        @forelse($record->businesses->take(3) as $business)
+-                            <div>{{ $business->name ?: 'Individual stallholder' }} <span class="text-xs text-slate-600">· {{ optional($business->businessCategory)->name ?: 'Unclassified' }}</span></div>
+-                        @empty — @endforelse
+-                        @if($record->businesses->count() > 3)<a class="text-xs text-blue-800 underline" href="{{ route('records.show',['tenants',$record->id,'tab'=>'businesses']) }}">See all {{ $record->businesses->count() }} businesses</a>@endif
+-                    </td>
+-                    <td>
+-                        @forelse($record->assignments->take(3) as $assignment)
+-                            <div>{{ $assignment->stall->code }} · {{ ucfirst($assignment->stall->location_type ?: 'unclassified') }}</div>
+-                            <div class="text-xs text-slate-600">{{ $assignment->stall->market->name }}</div>
+-                        @empty Unassigned @endforelse
+-                        @if($record->assignments->count() > 3)<span class="text-xs text-slate-600">{{ $record->assignments->count() }} total</span>@endif
+-                    </td>
+-                    @can('billing.view')
+-                        <td>
+-                            @foreach($record->assignments->take(3) as $assignment)
+-                                @php($agreement = $assignment->agreement)
+-                                @if($agreement)<div>{{ $assignment->stall->code }} · PHP {{ $agreement->monthly_amount }} <span class="text-xs text-slate-600">{{ $agreement->assessment ? $agreement->assessment->period : '(legacy)' }}</span></div>@endif
+-                            @endforeach
+-                            <div class="text-xs mt-1 {{ bccomp((string)$record->overdue_balance,'0',2)>0 ? 'text-red-800' : 'text-slate-600' }}">
+-                                @if(!$record->posted_bill_count) Unbilled
+-                                @elseif(bccomp((string)$record->outstanding_balance, '0', 2) > 0)
+-                                    {{ bccomp((string)$record->overdue_balance,'0',2)>0 ? 'Overdue · ' : 'Outstanding · ' }} PHP {{ bcadd((string)$record->outstanding_balance,'0',2) }} balance
+-                                @else Settled @endif
+-                            </div>
+-                        </td>
+-                    @endcan
+-                    @can('payments.view')<td>{{ $record->latest_payment_date ?: '—' }}</td>@endcan
+-                    @can('contracts.view')
+-                        <td>@if($contract = $record->contracts->sortByDesc('id')->first())<a class="text-blue-800 underline" href="{{ route('contracts.show',$contract) }}">{{ $contract->control_number }}</a><div class="text-xs text-slate-600">{{ ucfirst($contract->status) }}</div>@else No contract @endif</td>
+-                    @endcan
+-                    <td><span class="badge">{{ ucfirst($record->status) }}</span></td>
+-                    <td class="whitespace-nowrap">
+-                        <a class="underline text-blue-800 mr-2" href="{{ route('records.show',['tenants',$record->id]) }}">View</a>
+-                        @can('update',$record)<a class="underline text-blue-800" href="{{ route('records.edit',['tenants',$record->id]) }}">{{ $record->status === 'draft' ? 'Resume' : 'Edit' }}</a>@endcan
+-                    </td>
+-                </tr>
+-            @empty
+-                <tr><td class="empty" colspan="{{ 5 + (int)auth()->user()->can('billing.view') + (int)auth()->user()->can('payments.view') + (int)auth()->user()->can('contracts.view') }}">No tenants match these filters.</td></tr>
+-            @endforelse
+-        </tbody>
+-    </table></div>
+-    <div class="mt-5">{{ $records->links() }}</div>
+-</section>
+-@endsection
++@extends('layouts.app')
++@section('title','Tenant Management')
++@section('subtitle','Search stallholders, businesses and assignment records.')
++@section('actions')
++    @can('tenants.manage')<a class="btn" href="{{ route('records.create','tenants') }}">Register tenant</a>@endcan
++@endsection
++@section('content')
++<div class="flex flex-wrap gap-3 mb-4">
++    <a class="btn secondary" href="{{ route('tenant-businesses.index') }}">Search businesses</a>
++    @can('reports.personal')<a class="btn secondary" href="{{ route('reports.show','tenant-master') }}">Stallholder masterlist</a>@endcan
++</div>
++<section class="panel" aria-label="Tenant list">
++    <form class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-5" method="get">
++        <div class="sm:col-span-2"><label for="q">Tenant, business, stall, account or contact</label><input type="search" id="q" name="q" value="{{ request('q') }}" maxlength="100"></div>
++        <div><label for="status">Tenant status</label><select id="status" name="status"><option value="">All statuses</option>@foreach($tenantStatuses as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
++        <div><label for="stall">Stall code</label><input id="stall" name="stall" value="{{ request('stall') }}" maxlength="40"></div>
++        @foreach(['business_category_id'=>['Business category',$businessCategories],'category_id'=>['Physical stall category',$categories],'market_id'=>['Market',$markets]] as $field=>[$label,$options])
++            <div><label for="{{ $field }}">{{ $label }}</label><select id="{{ $field }}" name="{{ $field }}"><option value="">All</option>@foreach($options as $option)<option value="{{ $option->id }}" @if(request($field)==$option->id)selected @endif>{{ $option->name }}</option>@endforeach</select></div>
++        @endforeach
++        <div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>
++            @foreach($sections as $section)
++                <option value="{{ $section->id }}" @if(request('section_id') == $section->id) selected @endif>{{ $markets->firstWhere('id',$section->market_id)->name ?? 'Unknown market' }} · {{ $section->name }}@if($section->status === 'inactive') (Inactive)@endif</option>
++            @endforeach
++        </select></div>
++        <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner','outer','unclassified'] as $location)<option value="{{ $location }}" @if(request('location_type')===$location)selected @endif>{{ ucfirst($location) }}</option>@endforeach</select></div>
++        @can('billing.view')
++            <div><label for="payment_status">Payment status</label><select id="payment_status" name="payment_status"><option value="">All payment statuses</option>@foreach(['overdue'=>'Overdue','outstanding'=>'Outstanding (including overdue)','settled'=>'Settled','unbilled'=>'Unbilled'] as $value=>$label)<option value="{{ $value }}" @if(request('payment_status')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
++        @endcan
++        @can('contracts.view')
++            <div><label for="lease_status">Lease status</label><select id="lease_status" name="lease_status"><option value="">All lease statuses</option>@foreach($leaseStatuses as $status=>$label)<option value="{{ $status }}" @if(request('lease_status')===$status)selected @endif>{{ $label }}</option>@endforeach</select></div>
++        @endcan
++        <div class="flex flex-wrap items-end gap-2"><button type="submit" class="btn secondary">Filter</button><a class="btn secondary" href="{{ route('records.index','tenants') }}">Clear</a></div>
++    </form>
++    <div class="tablewrap"><table>
++        <thead><tr><th scope="col">Stallholder</th><th scope="col">Businesses</th><th scope="col">Active stalls</th>
++            @can('billing.view')<th scope="col">Rental and balance</th>@endcan
++            @can('payments.view')<th scope="col">Latest payment</th>@endcan
++            @can('contracts.view')<th scope="col">Latest lease</th>@endcan
++            <th scope="col">Status</th><th scope="col">Actions</th>
++        </tr></thead>
++        <tbody>
++            @forelse($records as $record)
++                <tr>
++                    <td>
++                        <a class="font-semibold text-blue-800 underline" href="{{ route('records.show',['tenants',$record->id]) }}">{{ $record->name }}</a>
++                        <div class="text-xs text-slate-600 mt-1">{{ $record->reference }}</div>
++                        @if($record->present_account_number || $record->phone)<div class="text-xs text-slate-600 mt-1">{{ implode(' · ', array_filter([$record->present_account_number,$record->phone])) }}</div>@endif
++                    </td>
++                    <td>
++                        @forelse($record->businesses->take(3) as $business)
++                            <div>{{ $business->name ?: 'Individual stallholder' }} <span class="text-xs text-slate-600">· {{ optional($business->businessCategory)->name ?: 'Unclassified' }}</span></div>
++                        @empty — @endforelse
++                        @if($record->businesses->count() > 3)<a class="text-xs text-blue-800 underline" href="{{ route('records.show',['tenants',$record->id,'tab'=>'businesses']) }}">See all {{ $record->businesses->count() }} businesses</a>@endif
++                    </td>
++                    <td>
++                        @forelse($record->assignments->take(3) as $assignment)
++                            <div>{{ $assignment->stall->code }} · {{ ucfirst($assignment->stall->location_type ?: 'unclassified') }}</div>
++                            <div class="text-xs text-slate-600">{{ $assignment->stall->market->name }}</div>
++                        @empty Unassigned @endforelse
++                        @if($record->assignments->count() > 3)<span class="text-xs text-slate-600">{{ $record->assignments->count() }} total</span>@endif
++                    </td>
++                    @can('billing.view')
++                        <td>
++                            @foreach($record->assignments->take(3) as $assignment)
++                                @php($agreement = $assignment->agreement)
++                                @if($agreement)<div>{{ $assignment->stall->code }} · PHP {{ $agreement->monthly_amount }} <span class="text-xs text-slate-600">{{ $agreement->assessment ? 'Initial assessment · '.$agreement->assessment->period : 'Legacy agreement' }}</span></div>@endif
++                            @endforeach
++                            <div class="text-xs mt-1 {{ bccomp((string)$record->overdue_balance,'0',2)>0 ? 'text-red-800' : 'text-slate-600' }}">
++                                @if(!$record->posted_bill_count) Unbilled
++                                @elseif(bccomp((string)$record->outstanding_balance, '0', 2) > 0)
++                                    {{ bccomp((string)$record->overdue_balance,'0',2)>0 ? 'Overdue · ' : 'Outstanding · ' }} PHP {{ bcadd((string)$record->outstanding_balance,'0',2) }} balance
++                                @else Settled @endif
++                            </div>
++                        </td>
++                    @endcan
++                    @can('payments.view')<td>{{ $record->latest_payment_date ?: '—' }}</td>@endcan
++                    @can('contracts.view')
++                        <td>@if($contract = $record->contracts->sortByDesc('id')->first())<a class="text-blue-800 underline" href="{{ route('contracts.show',$contract) }}">{{ $contract->control_number }}</a><div class="text-xs text-slate-600">{{ ucfirst($contract->status) }}</div>@else No contract @endif</td>
++                    @endcan
++                    <td><span class="badge">{{ ucfirst($record->status) }}</span></td>
++                    <td class="whitespace-nowrap">
++                        <a class="underline text-blue-800 mr-2" href="{{ route('records.show',['tenants',$record->id]) }}">View</a>
++                        @can('update',$record)<a class="underline text-blue-800" href="{{ route('records.edit',['tenants',$record->id]) }}">{{ $record->status === 'draft' ? 'Resume' : 'Edit' }}</a>@endcan
++                    </td>
++                </tr>
++            @empty
++                <tr><td class="empty" colspan="{{ 5 + (int)auth()->user()->can('billing.view') + (int)auth()->user()->can('payments.view') + (int)auth()->user()->can('contracts.view') }}">No tenants match these filters.</td></tr>
++            @endforelse
++        </tbody>
++    </table></div>
++    <div class="mt-5">{{ $records->links() }}</div>
++</section>
++@endsection
+--- before/tests/Feature/RentalOverrideWorkflowTest.php
++++ after/tests/Feature/RentalOverrideWorkflowTest.php
+@@ -1,369 +1,376 @@
+-<?php
+-
+-namespace Tests\Feature;
+-
+-use App\Models\{BusinessCategoryRentalRate, Market, MarketSection, RentalOverride, RentalPolicy, Stall, Tenant, User};
+-use App\Services\{AssignmentService, RentalOverrideService};
+-use Carbon\Carbon;
+-use Database\Seeders\RoleSeeder;
+-use Illuminate\Foundation\Testing\RefreshDatabase;
+-use Illuminate\Support\Str;
+-use Tests\Fixtures\ApprovedRentalConfiguration;
+-use Tests\TestCase;
+-
+-class RentalOverrideWorkflowTest extends TestCase
+-{
+-    use ApprovedRentalConfiguration, RefreshDatabase;
+-
+-    private $requester;
+-    private $reviewer;
+-    private $tenant;
+-    private $stall;
+-    private $section;
+-    private $assignment;
+-    private $url;
+-
+-    protected function setUp(): void
+-    {
+-        parent::setUp();
+-        Carbon::setTestNow('2030-01-01');
+-        $this->seed(RoleSeeder::class);
+-        $this->requester = $this->user('Requester', 'Market Staff');
+-        $this->reviewer = $this->user('Reviewer', 'Super Administrator');
+-        $this->actingAs($this->requester);
+-        $this->tenant = Tenant::create(['name'=>'Synthetic tenant', 'reference'=>'T1', 'status'=>'active']);
+-        $market = Market::create(['name'=>'Fictional market', 'code'=>'M1', 'status'=>'active']);
+-        $this->section = MarketSection::create(['market_id'=>$market->id, 'code'=>'S1', 'name'=>'Original section', 'status'=>'active']);
+-        $this->stall = Stall::create(['market_id'=>$market->id, 'market_section_id'=>$this->section->id,
+-            'code'=>'A1', 'classification'=>'standard', 'location_type'=>'outer', 'area'=>'10.00', 'status'=>'vacant']);
+-        $business = $this->businessWithApprovedRental($this->reviewer, $this->tenant, $market->id);
+-        BusinessCategoryRentalRate::where('business_category_id', $business->business_category_id)->update(['minimum_rate'=>'21.04']);
+-        $this->assignment = app(AssignmentService::class)->assign($this->reviewer, [
+-            'tenant_id'=>$this->tenant->id, 'stall_id'=>$this->stall->id, 'business_id'=>$business->id,
+-            'start_date'=>'2029-12-01', 'agreement_reference'=>'REF-TEST',
+-        ]);
+-        $this->url = "/tenants/{$this->tenant->id}/assignments/{$this->assignment->id}/rental-overrides";
+-    }
+-
+-    protected function tearDown(): void
+-    {
+-        Carbon::setTestNow();
+-        parent::tearDown();
+-    }
+-
+-    public function test_preview_and_direct_actions_are_scoped_and_permission_gated(): void
+-    {
+-        $data = $this->terms() + ['period'=>'2030-02', 'proposed_daily_rental'=>'3.00'];
+-        $this->postJson($this->url.'/preview', $data)->assertOk()->assertJsonPath('computation_mode', 'proposed')
+-            ->assertJsonPath('daily_rental', '225.00')->assertJsonPath('automatic_daily_rental', '250.00')
+-            ->assertJsonPath('rental_override_id', null);
+-        $this->postJson($this->url.'/preview', $data + ['override_daily_amount'=>'150'])
+-            ->assertStatus(422)->assertJsonValidationErrors('override_type');
+-        $this->postJson($this->url.'/preview', $data + ['stall_id'=>999])->assertStatus(422)->assertJsonValidationErrors('stall_id');
+-        $this->assertDatabaseCount('rental_overrides', 0);
+-        $other = Tenant::create(['name'=>'Wrong tenant', 'reference'=>'T2', 'status'=>'active']);
+-        $foreignUrl = "/tenants/{$other->id}/assignments/{$this->assignment->id}/rental-overrides";
+-        $this->postJson($foreignUrl.'/preview', $data)->assertNotFound();
+-        $this->postJson($foreignUrl, $data)->assertNotFound();
+-        $this->get($foreignUrl)->assertNotFound();
+-        $pending = $this->pending();
+-        $second = $this->assignment->replicate();
+-        $second->active_stall_id = null;
+-        $second->status = 'ended';
+-        $second->save();
+-        $wrongAssignment = "/tenants/{$this->tenant->id}/assignments/{$second->id}/rental-overrides/{$pending->id}";
+-        $this->actingAs($this->reviewer)->postJson($wrongAssignment.'/approve', ['fingerprint'=>str_repeat('a', 64)])->assertNotFound();
+-        $viewer = $this->user('Treasurer', 'Treasury/Accounting Officer');
+-        $this->actingAs($viewer)->get($this->url)->assertOk()->assertSee($pending->reason)->assertDontSee('Approve request');
+-        $this->postJson($this->url.'/preview', $data)->assertForbidden();
+-        $this->postJson($this->url, $data)->assertForbidden();
+-        foreach (['submit', 'approve', 'reject', 'revoke'] as $action) {
+-            $this->postJson($this->url.'/'.$pending->id.'/'.$action)->assertForbidden();
+-        }
+-    }
+-
+-    public function test_store_submit_intent_is_atomic_and_exact_replay_is_idempotent(): void
+-    {
+-        $terms = $this->terms(['intent'=>'submit', 'period'=>'2030-02']);
+-        $this->get($this->url.'/create?period=2030-02')->assertOk()->assertSee('Preview proposed rent')
+-            ->assertSee('name="intent" value="submit"', false);
+-        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
+-        $pending = RentalOverride::sole();
+-        $this->assertSame('pending', $pending->status);
+-        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
+-        $this->postJson($this->url, array_replace($terms, ['reason'=>'Changed replay']))->assertStatus(422)->assertJsonValidationErrors('submission_key');
+-        $this->assertDatabaseCount('rental_overrides', 1);
+-    }
+-
+-    public function test_finite_assignment_form_keeps_reference_month_and_offers_only_full_months(): void
+-    {
+-        $this->assignment->update(['end_date'=>'2030-04-10']);
+-        $this->get($this->url.'/create?period=2030-02')->assertOk()
+-            ->assertSee('name="period" value="2030-02"', false)
+-            ->assertSee('type="date" value="2030-02-01"', false)
+-            ->assertSee('type="date" value="2030-03-31"', false);
+-        $this->assignment->update(['end_date'=>'2030-01-25']);
+-        $this->get($this->url.'/create?period=2030-02')
+-            ->assertRedirect($this->url.'?period=2030-02')->assertSessionHasErrors('assignment');
+-    }
+-
+-    public function test_rental_mode_selection_opens_request_or_prospective_return_workflow(): void
+-    {
+-        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
+-        $create = $this->url.'/create?period=2030-02&computation_mode=';
+-        $this->get($profile)->assertOk()->assertSee('name="computation_mode"', false)
+-            ->assertSee('Automatic (default)')->assertSee('Manual override');
+-        $this->get($create.'automatic')->assertRedirect($profile);
+-        $this->get($create.'manual_override')->assertOk()->assertSee('Override method (required)');
+-        $this->assertDatabaseCount('rental_overrides', 0);
+-
+-        $pending = $this->pending();
+-        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
+-        $this->actingAs($this->reviewer)->get($create.'automatic')->assertRedirect($this->url.'?period=2030-02');
+-        $this->get($this->url.'?period=2030-02')->assertOk()->assertSee('Return to automatic');
+-        $this->assertSame('approved', $pending->fresh()->status);
+-    }
+-
+-    public function test_draft_edit_and_submit_bind_displayed_terms(): void
+-    {
+-        $terms = $this->terms();
+-        $this->post($this->url, $terms + ['intent'=>'save'])->assertRedirect();
+-        $draft = RentalOverride::sole();
+-        $url = $this->url.'/'.$draft->id;
+-        $stale = RentalOverrideService::fingerprint($draft);
+-        $this->get($url.'/edit')->assertOk()->assertSee($stale)->assertSee($draft->request_hash);
+-        $this->putJson($url, array_replace($terms, ['reason'=>'Revised pending request']))
+-            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+-        $this->put($url, array_replace($terms, ['reason'=>'Revised pending request', 'draft_fingerprint'=>$stale]))->assertRedirect();
+-        $this->putJson($url, array_replace($terms, ['reason'=>'Stale browser edit', 'draft_fingerprint'=>$stale]))
+-            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+-        $this->assertSame('Revised pending request', $draft->fresh()->reason);
+-        $this->postJson($url.'/submit', ['draft_fingerprint'=>$stale, 'draft_terms_hash'=>$draft->request_hash])
+-            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+-        $this->assertSame('draft', $draft->fresh()->status);
+-        $fresh = $draft->fresh();
+-        $submission = ['draft_fingerprint'=>RentalOverrideService::fingerprint($fresh), 'draft_terms_hash'=>$fresh->request_hash];
+-        $this->post($url.'/submit', $submission)->assertRedirect();
+-        RentalPolicy::firstOrFail()->update(['reference_document'=>'DRIFTED TEST AUTHORITY']);
+-        $this->post($url.'/submit', $submission)->assertRedirect();
+-        $this->assertSame('pending', $draft->fresh()->status);
+-    }
+-
+-    public function test_stale_html_edit_retry_shows_and_saves_the_current_draft(): void
+-    {
+-        $terms = $this->terms(['reason'=>'Original draft terms']);
+-        $service = app(RentalOverrideService::class);
+-        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
+-        $url = $this->url.'/'.$draft->id;
+-        $edit = $url.'/edit?period=2030-02';
+-        $oldFingerprint = RentalOverrideService::fingerprint($draft);
+-        $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Newer saved terms']), $draft);
+-
+-        $this->from($edit)->put($url, array_replace($terms, [
+-            'reason'=>'Stale browser edits', 'draft_fingerprint'=>$oldFingerprint, 'period'=>'2030-02',
+-        ]))->assertRedirect($edit)->assertSessionHasErrors('draft_fingerprint');
+-        $response = $this->get($edit)->assertOk()
+-            ->assertSee('Showing the latest saved draft')
+-            ->assertSee('Newer saved terms')->assertDontSee('Stale browser edits');
+-        $this->assertSame(1, preg_match('/name="draft_fingerprint" value="([a-f0-9]{64})"/', $response->getContent(), $fingerprint));
+-        $this->assertSame(1, preg_match('/<textarea id="override_reason"[^>]*>(.*?)<\/textarea>/s', $response->getContent(), $reason));
+-        $this->put($url, array_replace($terms, [
+-            'reason'=>html_entity_decode($reason[1]), 'draft_fingerprint'=>$fingerprint[1], 'period'=>'2030-02',
+-        ]))->assertRedirect($edit)->assertSessionHasNoErrors();
+-        $this->assertSame('Newer saved terms', $draft->fresh()->reason);
+-    }
+-
+-    public function test_two_tabs_bind_pending_replay_to_the_original_displayed_terms(): void
+-    {
+-        $terms = $this->terms(['reason'=>'Tab A terms']);
+-        $service = app(RentalOverrideService::class);
+-        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
+-        $url = $this->url.'/'.$draft->id.'/submit';
+-        $tabA = ['draft_terms_hash'=>$draft->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($draft)];
+-        $updated = $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Tab B terms']), $draft);
+-        $tabB = ['draft_terms_hash'=>$updated->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($updated)];
+-        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
+-        $this->postJson($url, $tabA)->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+-        RentalPolicy::firstOrFail()->update(['reference_document'=>'Authority changed after submission']);
+-        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
+-        $this->assertSame('pending', $draft->fresh()->status);
+-        $this->assertSame('Tab B terms', $draft->fresh()->reason);
+-    }
+-
+-    public function test_request_only_reader_cannot_distinguish_existing_and_missing_revision_sources(): void
+-    {
+-        $source = $this->pending();
+-        $limited = $this->user('LimitedRequester', 'Authorized Collection Officer');
+-        $limited->givePermissionTo(['rentals.override.view', 'rentals.override.request']);
+-        $this->actingAs($limited)->get($this->url.'/create')->assertOk();
+-        $this->get($this->url.'/create?source_override_id='.$source->id)->assertForbidden();
+-        $this->get($this->url.'/create?source_override_id='.($source->id + 999))->assertForbidden();
+-    }
+-
+-    public function test_approval_only_reader_sees_request_specific_range_and_exemption_warnings(): void
+-    {
+-        $outside = $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
+-            'override_daily_amount'=>'200', 'reason'=>'Direct daily outside approved range']);
+-        $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
+-            'override_daily_amount'=>'0', 'reason'=>'Zero rent exemption requested']);
+-        $approver = $this->user('LimitedApprover', 'Authorized Collection Officer');
+-        $approver->givePermissionTo(['rentals.override.view', 'rentals.override.history', 'rentals.override.approve']);
+-        $this->assertFalse($approver->can('rentals.override.request'));
+-        $response = $this->actingAs($approver)->get($this->url)->assertOk()
+-            ->assertSee('Proposed daily rent is outside the approved category range.')
+-            ->assertSee('This proposal requests a zero-rent exemption. CUSA remains payable.')
+-            ->assertSee('Approve request')->assertSee(RentalOverrideService::fingerprint($outside));
+-        $this->assertSame(2, substr_count($response->getContent(), 'Proposed daily rent is outside the approved category range.'));
+-        $this->assertSame(1, substr_count($response->getContent(), 'This proposal requests a zero-rent exemption.'));
+-    }
+-
+-    public function test_approval_binds_policy_and_rejection_revision_and_revocation_retain_history(): void
+-    {
+-        $pending = $this->pending();
+-        $this->requester->givePermissionTo('rentals.override.approve');
+-        $url = $this->url.'/'.$pending->id;
+-        $review = RentalOverrideService::review($pending);
+-        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('approved_by');
+-        $this->actingAs($this->reviewer)->get($this->url.'?period=2030-02')
+-            ->assertOk()->assertSee($review['fingerprint'])->assertSee($review['policy']['reference_document'])
+-            ->assertSee('Proposed daily rent')->assertSee('Pending');
+-        RentalPolicy::firstOrFail()->update(['reference_document'=>'CHANGED-TEST-AUTHORITY']);
+-        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('fingerprint');
+-        $this->post($url.'/reject', ['reason'=>'Required revision'])->assertRedirect();
+-        $this->actingAs($this->requester)->get($this->url.'/create?source_override_id='.$pending->id)->assertOk()
+-            ->assertSee('name="source_override_id" value="'.$pending->id.'"', false);
+-        $this->post($this->url, $this->terms(['source_override_id'=>$pending->id, 'intent'=>'submit']))->assertRedirect();
+-        $new = RentalOverride::where('source_override_id', $pending->id)->sole();
+-        $this->actingAs($this->reviewer);
+-        $newUrl = $this->url.'/'.$new->id;
+-        $fp = RentalOverrideService::review($new)['fingerprint'];
+-        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
+-        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
+-        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
+-        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
+-        $this->postJson($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Conflicting return'])
+-            ->assertStatus(422)->assertJsonValidationErrors('status');
+-        RentalPolicy::firstOrFail()->update(['reference_document'=>'LATER-TEST-AUTHORITY']);
+-        $this->get($this->url.'?period=2030-03')->assertOk()->assertSee('Required revision')->assertSee('Return decision')
+-            ->assertSee('CHANGED-TEST-AUTHORITY')->assertDontSee('LATER-TEST-AUTHORITY')->assertSee('Revoked');
+-    }
+-
+-    public function test_map_and_tenant_show_reference_month_and_mask_override_information(): void
+-    {
+-        $pending = $this->pending();
+-        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
+-        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental';
+-        $map = '/map/stalls/'.$this->stall->id;
+-        $this->section->update(['name'=>'Renamed section']);
+-        $this->get($profile)->assertOk()->assertSee('Applicable daily rent')->assertSee('250.00')->assertDontSee('Approved override applies');
+-        $this->get($profile.'&period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('225.00');
+-        $this->get($map.'?period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('Renamed section')
+-            ->assertSee('Original section')->assertSee('225.00');
+-        $this->get('/map?period=2030-02&computation_mode=manual_override')->assertOk()->assertSee('?period=2030-02');
+-        $this->get('/map?period=2030-02&computation_mode=automatic')->assertOk()->assertDontSee('?period=2030-02');
+-        $viewer = $this->user('Viewer', 'LGU Management Viewer');
+-        $this->actingAs($viewer)->get($map)->assertOk()->assertSee('Renamed section')
+-            ->assertDontSee('Approved override')->assertDontSee('225.00')->assertDontSee('250.00')->assertDontSee($pending->reason);
+-        $this->get('/reports/rental-overrides')->assertForbidden();
+-        $this->get('/map?computation_mode=manual_override')->assertForbidden();
+-        $this->assignment->update(['status'=>'ended', 'end_date'=>'2030-02-28']);
+-        $this->actingAs($this->requester)->get($profile.'&period=2030-04')->assertOk()->assertSee('Initial assessment')
+-            ->assertSee('Override history')->assertDontSee('Request manual override');
+-        $this->get($this->url.'?period=2030-04')->assertOk()->assertSee($pending->reason)->assertSee('Expired');
+-    }
+-
+-    public function test_report_filters_are_shared_by_screen_and_export(): void
+-    {
+-        $approved = $this->pending(['reason'=>'Approved fixture', 'effective_until'=>'2030-02-28']);
+-        app(RentalOverrideService::class)->approve($this->reviewer, $approved, RentalOverrideService::fingerprint($approved));
+-        $this->pending(['reason'=>'=Pending fixture', 'effective_from'=>'2030-03-01']);
+-        $this->actingAs($this->reviewer);
+-        $url = '/reports/rental-overrides?status=pending&as_of=2030-03-01&section_id='.$this->section->id;
+-        $this->get($url)->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
+-        $this->get($url.'&format=print')->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
+-        $csv = $this->get($url.'&format=csv')->assertOk()->streamedContent();
+-        $this->assertStringContainsString("'=Pending fixture", $csv);
+-        $this->assertStringNotContainsString('Approved fixture', $csv);
+-        $xlsx = $this->get($url.'&format=xlsx')->assertOk()->streamedContent();
+-        $file = tempnam(sys_get_temp_dir(), 'override-report');
+-        try {
+-            file_put_contents($file, $xlsx);
+-            $book = (new \PhpOffice\PhpSpreadsheet\Reader\Xlsx())->load($file);
+-            $cells = json_encode($book->getActiveSheet()->toArray());
+-            $this->assertStringContainsString('=Pending fixture', $cells);
+-            $this->assertStringNotContainsString('Approved fixture', $cells);
+-            $book->disconnectWorksheets();
+-        } finally {
+-            unlink($file);
+-        }
+-        $pdfReasons = null;
+-        \Illuminate\Support\Facades\View::composer('reports.print', function ($view) use (&$pdfReasons) {
+-            $pdfReasons = $view->getData()['rows']->pluck('reason')->all();
+-        });
+-        $pdf = $this->get($url.'&format=pdf')->assertOk()->assertHeader('Content-Type', 'application/pdf');
+-        $this->assertStringStartsWith('%PDF', $pdf->getContent());
+-        $this->assertSame(['=Pending fixture'], $pdfReasons);
+-        $this->get('/reports/rental-overrides?status=expired&as_of=2030-03-01')
+-            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture');
+-        $this->get('/reports/rental-overrides?computation_mode=manual_override&as_of=2030-02-15')
+-            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture')
+-            ->assertViewHas('rows', function ($rows) {
+-                $row = $rows->first();
+-                return $rows->total() === 1 && $row->computation_mode === 'manual_override' &&
+-                    $row->applicable_daily_rent == 225.00 && $row->applicable_daily_difference == -25.00;
+-            });
+-        $this->get('/reports/rental-assessments?computation_mode=manual_override')
+-            ->assertOk()->assertSee('No matching records.');
+-        $this->get('/reports/stall-master')->assertOk()->assertDontSee('name="computation_mode"', false);
+-    }
+-
+-    public function test_pending_profile_state_and_assessment_mode_respect_override_visibility(): void
+-    {
+-        $pending = $this->pending(['effective_until'=>'2030-02-28']);
+-        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
+-        $this->get($profile)->assertOk()->assertSee('1 pending request')->assertDontSee('Approved override applies');
+-
+-        $service = app(RentalOverrideService::class);
+-        $service->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
+-        Carbon::setTestNow('2030-02-01');
+-        app(\App\Services\RentalCalculationService::class)->assess($this->reviewer, $this->assignment, '2030-02', 'billing');
+-        Carbon::setTestNow('2030-04-01');
+-        $report = '/reports/rental-assessments?as_of=2030-04-01';
+-        $this->actingAs($this->reviewer)->get($report.'&computation_mode=manual_override')->assertOk()
+-            ->assertViewHas('rows', fn ($rows) => $rows->total() === 1 && $rows->first()->period === '2030-02' &&
+-                $rows->first()->computation_mode === 'manual_override');
+-        $this->actingAs($this->user('Collector', 'Authorized Collection Officer'))->get($report)->assertOk()
+-            ->assertDontSee('name="computation_mode"', false)->assertDontSee('manual_override')->assertSee('225');
+-        $this->get($report.'&computation_mode=manual_override')->assertForbidden();
+-    }
+-
+-    public function test_report_forms_render_only_supported_scope_and_date_filters(): void
+-    {
+-        $this->actingAs($this->reviewer)->get('/reports/stall-master')->assertOk()
+-            ->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
+-            ->assertDontSee('name="tenant_id"', false)->assertDontSee('name="recorded_by"', false);
+-        $this->get('/reports/audit-trail')->assertOk()
+-            ->assertSee('name="from"', false)->assertDontSee('name="stall_id"', false);
+-        $this->get('/reports/rental-overrides')->assertOk()
+-            ->assertSee('name="as_of"', false)->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
+-            ->assertDontSee('name="recorded_by"', false);
+-    }
+-
+-    private function user(string $name, string $role): User
+-    {
+-        $user = User::create(['name'=>$name, 'email'=>strtolower($name).'@example.test', 'password'=>'unused', 'active'=>true]);
+-        return $user->assignRole($role);
+-    }
+-
+-    private function terms(array $changes = []): array
+-    {
+-        return array_replace(['submission_key'=>(string) Str::uuid(), 'override_type'=>'rate_per_sqm',
+-            'override_rate_per_sqm'=>'22.50', 'effective_from'=>'2030-02-01', 'reason'=>'Synthetic override reason'], $changes);
+-    }
+-
+-    private function pending(array $changes = []): RentalOverride
+-    {
+-        $service = app(RentalOverrideService::class);
+-        return $service->submit($this->requester, $service->saveDraft($this->requester, $this->assignment, $this->terms($changes)));
+-    }
+-}
++<?php
++
++namespace Tests\Feature;
++
++use App\Models\{BusinessCategoryRentalRate, Market, MarketSection, RentalOverride, RentalPolicy, Stall, Tenant, User};
++use App\Services\{AssignmentService, RentalOverrideService};
++use Carbon\Carbon;
++use Database\Seeders\RoleSeeder;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Str;
++use Tests\Fixtures\ApprovedRentalConfiguration;
++use Tests\TestCase;
++
++class RentalOverrideWorkflowTest extends TestCase
++{
++    use ApprovedRentalConfiguration, RefreshDatabase;
++
++    private $requester;
++    private $reviewer;
++    private $tenant;
++    private $stall;
++    private $section;
++    private $assignment;
++    private $url;
++
++    protected function setUp(): void
++    {
++        parent::setUp();
++        Carbon::setTestNow('2030-01-01');
++        $this->seed(RoleSeeder::class);
++        $this->requester = $this->user('Requester', 'Market Staff');
++        $this->reviewer = $this->user('Reviewer', 'Super Administrator');
++        $this->actingAs($this->requester);
++        $this->tenant = Tenant::create(['name'=>'Synthetic tenant', 'reference'=>'T1', 'status'=>'active']);
++        $market = Market::create(['name'=>'Fictional market', 'code'=>'M1', 'status'=>'active']);
++        $this->section = MarketSection::create(['market_id'=>$market->id, 'code'=>'S1', 'name'=>'Original section', 'status'=>'active']);
++        $this->stall = Stall::create(['market_id'=>$market->id, 'market_section_id'=>$this->section->id,
++            'code'=>'A1', 'classification'=>'standard', 'location_type'=>'outer', 'area'=>'10.00', 'status'=>'vacant']);
++        $business = $this->businessWithApprovedRental($this->reviewer, $this->tenant, $market->id);
++        BusinessCategoryRentalRate::where('business_category_id', $business->business_category_id)->update(['minimum_rate'=>'21.04']);
++        $this->assignment = app(AssignmentService::class)->assign($this->reviewer, [
++            'tenant_id'=>$this->tenant->id, 'stall_id'=>$this->stall->id, 'business_id'=>$business->id,
++            'start_date'=>'2029-12-01', 'agreement_reference'=>'REF-TEST',
++        ]);
++        $this->url = "/tenants/{$this->tenant->id}/assignments/{$this->assignment->id}/rental-overrides";
++    }
++
++    protected function tearDown(): void
++    {
++        Carbon::setTestNow();
++        parent::tearDown();
++    }
++
++    public function test_preview_and_direct_actions_are_scoped_and_permission_gated(): void
++    {
++        $data = $this->terms() + ['period'=>'2030-02', 'proposed_daily_rental'=>'3.00'];
++        $this->postJson($this->url.'/preview', $data)->assertOk()->assertJsonPath('computation_mode', 'proposed')
++            ->assertJsonPath('daily_rental', '225.00')->assertJsonPath('automatic_daily_rental', '250.00')
++            ->assertJsonPath('rental_override_id', null);
++        $this->postJson($this->url.'/preview', $data + ['override_daily_amount'=>'150'])
++            ->assertStatus(422)->assertJsonValidationErrors('override_type');
++        $this->postJson($this->url.'/preview', $data + ['stall_id'=>999])->assertStatus(422)->assertJsonValidationErrors('stall_id');
++        $this->assertDatabaseCount('rental_overrides', 0);
++        $other = Tenant::create(['name'=>'Wrong tenant', 'reference'=>'T2', 'status'=>'active']);
++        $foreignUrl = "/tenants/{$other->id}/assignments/{$this->assignment->id}/rental-overrides";
++        $this->postJson($foreignUrl.'/preview', $data)->assertNotFound();
++        $this->postJson($foreignUrl, $data)->assertNotFound();
++        $this->get($foreignUrl)->assertNotFound();
++        $pending = $this->pending();
++        $second = $this->assignment->replicate();
++        $second->active_stall_id = null;
++        $second->status = 'ended';
++        $second->save();
++        $wrongAssignment = "/tenants/{$this->tenant->id}/assignments/{$second->id}/rental-overrides/{$pending->id}";
++        $this->actingAs($this->reviewer)->postJson($wrongAssignment.'/approve', ['fingerprint'=>str_repeat('a', 64)])->assertNotFound();
++        $viewer = $this->user('Treasurer', 'Treasury/Accounting Officer');
++        $this->actingAs($viewer)->get($this->url)->assertOk()->assertSee($pending->reason)->assertDontSee('Approve request');
++        $this->postJson($this->url.'/preview', $data)->assertForbidden();
++        $this->postJson($this->url, $data)->assertForbidden();
++        foreach (['submit', 'approve', 'reject', 'revoke'] as $action) {
++            $this->postJson($this->url.'/'.$pending->id.'/'.$action)->assertForbidden();
++        }
++    }
++
++    public function test_store_submit_intent_is_atomic_and_exact_replay_is_idempotent(): void
++    {
++        $terms = $this->terms(['intent'=>'submit', 'period'=>'2030-02']);
++        $this->get($this->url.'/create?period=2030-02')->assertOk()->assertSee('Preview proposed rent')
++            ->assertSee('name="intent" value="submit"', false);
++        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
++        $pending = RentalOverride::sole();
++        $this->assertSame('pending', $pending->status);
++        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
++        $this->postJson($this->url, array_replace($terms, ['reason'=>'Changed replay']))->assertStatus(422)->assertJsonValidationErrors('submission_key');
++        $this->assertDatabaseCount('rental_overrides', 1);
++    }
++
++    public function test_finite_assignment_form_keeps_reference_month_and_offers_only_full_months(): void
++    {
++        $this->assignment->update(['end_date'=>'2030-04-10']);
++        $this->get($this->url.'/create?period=2030-02')->assertOk()
++            ->assertSee('name="period" value="2030-02"', false)
++            ->assertSee('type="date" value="2030-02-01"', false)
++            ->assertSee('type="date" value="2030-03-31"', false);
++        $this->assignment->update(['end_date'=>'2030-01-25']);
++        $this->get($this->url.'/create?period=2030-02')
++            ->assertRedirect($this->url.'?period=2030-02')->assertSessionHasErrors('assignment');
++    }
++
++    public function test_rental_mode_selection_opens_request_or_prospective_return_workflow(): void
++    {
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
++        $create = $this->url.'/create?period=2030-02&computation_mode=';
++        $this->get($profile)->assertOk()->assertSee('name="computation_mode"', false)
++            ->assertSee('Automatic (default)')->assertSee('Manual override');
++        $this->get($create.'automatic')->assertRedirect($profile);
++        $this->get($create.'manual_override')->assertOk()->assertSee('Override method (required)');
++        $this->assertDatabaseCount('rental_overrides', 0);
++
++        $pending = $this->pending();
++        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        $this->actingAs($this->reviewer)->get($create.'automatic')->assertRedirect($this->url.'?period=2030-02');
++        $this->get($this->url.'?period=2030-02')->assertOk()->assertSee('Return to automatic');
++        $this->assertSame('approved', $pending->fresh()->status);
++    }
++
++    public function test_draft_edit_and_submit_bind_displayed_terms(): void
++    {
++        $terms = $this->terms();
++        $this->post($this->url, $terms + ['intent'=>'save'])->assertRedirect();
++        $draft = RentalOverride::sole();
++        $url = $this->url.'/'.$draft->id;
++        $stale = RentalOverrideService::fingerprint($draft);
++        $this->get($url.'/edit')->assertOk()->assertSee($stale)->assertSee($draft->request_hash);
++        $this->putJson($url, array_replace($terms, ['reason'=>'Revised pending request']))
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->put($url, array_replace($terms, ['reason'=>'Revised pending request', 'draft_fingerprint'=>$stale]))->assertRedirect();
++        $this->putJson($url, array_replace($terms, ['reason'=>'Stale browser edit', 'draft_fingerprint'=>$stale]))
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->assertSame('Revised pending request', $draft->fresh()->reason);
++        $this->postJson($url.'/submit', ['draft_fingerprint'=>$stale, 'draft_terms_hash'=>$draft->request_hash])
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->assertSame('draft', $draft->fresh()->status);
++        $fresh = $draft->fresh();
++        $submission = ['draft_fingerprint'=>RentalOverrideService::fingerprint($fresh), 'draft_terms_hash'=>$fresh->request_hash];
++        $this->post($url.'/submit', $submission)->assertRedirect();
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'DRIFTED TEST AUTHORITY']);
++        $this->post($url.'/submit', $submission)->assertRedirect();
++        $this->assertSame('pending', $draft->fresh()->status);
++    }
++
++    public function test_stale_html_edit_retry_shows_and_saves_the_current_draft(): void
++    {
++        $terms = $this->terms(['reason'=>'Original draft terms']);
++        $service = app(RentalOverrideService::class);
++        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
++        $url = $this->url.'/'.$draft->id;
++        $edit = $url.'/edit?period=2030-02';
++        $oldFingerprint = RentalOverrideService::fingerprint($draft);
++        $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Newer saved terms']), $draft);
++
++        $this->from($edit)->put($url, array_replace($terms, [
++            'reason'=>'Stale browser edits', 'draft_fingerprint'=>$oldFingerprint, 'period'=>'2030-02',
++        ]))->assertRedirect($edit)->assertSessionHasErrors('draft_fingerprint');
++        $response = $this->get($edit)->assertOk()
++            ->assertSee('Showing the latest saved draft')
++            ->assertSee('Newer saved terms')->assertDontSee('Stale browser edits');
++        $this->assertSame(1, preg_match('/name="draft_fingerprint" value="([a-f0-9]{64})"/', $response->getContent(), $fingerprint));
++        $this->assertSame(1, preg_match('/<textarea id="override_reason"[^>]*>(.*?)<\/textarea>/s', $response->getContent(), $reason));
++        $this->put($url, array_replace($terms, [
++            'reason'=>html_entity_decode($reason[1]), 'draft_fingerprint'=>$fingerprint[1], 'period'=>'2030-02',
++        ]))->assertRedirect($edit)->assertSessionHasNoErrors();
++        $this->assertSame('Newer saved terms', $draft->fresh()->reason);
++    }
++
++    public function test_two_tabs_bind_pending_replay_to_the_original_displayed_terms(): void
++    {
++        $terms = $this->terms(['reason'=>'Tab A terms']);
++        $service = app(RentalOverrideService::class);
++        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
++        $url = $this->url.'/'.$draft->id.'/submit';
++        $tabA = ['draft_terms_hash'=>$draft->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($draft)];
++        $updated = $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Tab B terms']), $draft);
++        $tabB = ['draft_terms_hash'=>$updated->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($updated)];
++        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
++        $this->postJson($url, $tabA)->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'Authority changed after submission']);
++        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame('pending', $draft->fresh()->status);
++        $this->assertSame('Tab B terms', $draft->fresh()->reason);
++    }
++
++    public function test_request_only_reader_cannot_distinguish_existing_and_missing_revision_sources(): void
++    {
++        $source = $this->pending();
++        $limited = $this->user('LimitedRequester', 'Authorized Collection Officer');
++        $limited->givePermissionTo(['rentals.override.view', 'rentals.override.request']);
++        $this->actingAs($limited)->get($this->url.'/create')->assertOk();
++        $this->get($this->url.'/create?source_override_id='.$source->id)->assertForbidden();
++        $this->get($this->url.'/create?source_override_id='.($source->id + 999))->assertForbidden();
++    }
++
++    public function test_approval_only_reader_sees_request_specific_range_and_exemption_warnings(): void
++    {
++        $outside = $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
++            'override_daily_amount'=>'200', 'reason'=>'Direct daily outside approved range']);
++        $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
++            'override_daily_amount'=>'0', 'reason'=>'Zero rent exemption requested']);
++        $approver = $this->user('LimitedApprover', 'Authorized Collection Officer');
++        $approver->givePermissionTo(['rentals.override.view', 'rentals.override.history', 'rentals.override.approve']);
++        $this->assertFalse($approver->can('rentals.override.request'));
++        $response = $this->actingAs($approver)->get($this->url)->assertOk()
++            ->assertSee('Proposed daily rent is outside the approved category range.')
++            ->assertSee('This proposal requests a zero-rent exemption. CUSA remains payable.')
++            ->assertSee('Approve request')->assertSee(RentalOverrideService::fingerprint($outside));
++        $this->assertSame(2, substr_count($response->getContent(), 'Proposed daily rent is outside the approved category range.'));
++        $this->assertSame(1, substr_count($response->getContent(), 'This proposal requests a zero-rent exemption.'));
++    }
++
++    public function test_approval_binds_policy_and_rejection_revision_and_revocation_retain_history(): void
++    {
++        $pending = $this->pending();
++        $this->requester->givePermissionTo('rentals.override.approve');
++        $url = $this->url.'/'.$pending->id;
++        $review = RentalOverrideService::review($pending);
++        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('approved_by');
++        $this->actingAs($this->reviewer)->get($this->url.'?period=2030-02')
++            ->assertOk()->assertSee($review['fingerprint'])->assertSee($review['policy']['reference_document'])
++            ->assertSee('Proposed daily rent')->assertSee('Pending');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'CHANGED-TEST-AUTHORITY']);
++        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('fingerprint');
++        $this->post($url.'/reject', ['reason'=>'Required revision'])->assertRedirect();
++        $this->actingAs($this->requester)->get($this->url.'/create?source_override_id='.$pending->id)->assertOk()
++            ->assertSee('name="source_override_id" value="'.$pending->id.'"', false);
++        $this->post($this->url, $this->terms(['source_override_id'=>$pending->id, 'intent'=>'submit']))->assertRedirect();
++        $new = RentalOverride::where('source_override_id', $pending->id)->sole();
++        $this->actingAs($this->reviewer);
++        $newUrl = $this->url.'/'.$new->id;
++        $fp = RentalOverrideService::review($new)['fingerprint'];
++        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
++        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
++        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
++        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
++        $this->postJson($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Conflicting return'])
++            ->assertStatus(422)->assertJsonValidationErrors('status');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'LATER-TEST-AUTHORITY']);
++        $this->get($this->url.'?period=2030-03')->assertOk()->assertSee('Required revision')->assertSee('Return decision')
++            ->assertSee('CHANGED-TEST-AUTHORITY')->assertDontSee('LATER-TEST-AUTHORITY')->assertSee('Revoked');
++    }
++
++    public function test_map_and_tenant_show_reference_month_and_mask_override_information(): void
++    {
++        $pending = $this->pending();
++        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental';
++        $map = '/map/stalls/'.$this->stall->id;
++        $this->section->update(['name'=>'Renamed section']);
++        $this->get($profile)->assertOk()->assertSee('Applicable daily rent')->assertSee('250.00')->assertDontSee('Approved override applies');
++        $this->get($profile.'&period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('225.00');
++        $this->get($map.'?period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('Renamed section')
++            ->assertSee('Original section')->assertSee('225.00');
++        $this->get('/map?period=2030-02&computation_mode=manual_override')->assertOk()->assertSee('?period=2030-02');
++        $this->get('/map?period=2030-02&computation_mode=automatic')->assertOk()->assertDontSee('?period=2030-02');
++        Carbon::setTestNow('2030-02-01');
++        $stallDetail = '/manage/stalls/'.$this->stall->id;
++        $this->get($stallDetail)->assertOk()->assertSee('Initial assessed daily rate per sq. m. (PHP)')
++            ->assertSee('Initial assessed daily base rent (PHP)')->assertSee('250.00')->assertSee($profile);
++        $this->get('/manage/stalls')->assertOk()->assertSee('Initial assessment / legacy rent');
++        $this->get('/manage/tenants')->assertOk()->assertSee('Initial assessment · 2029-12');
++        $viewer = $this->user('Viewer', 'LGU Management Viewer');
++        $this->actingAs($viewer)->get($map)->assertOk()->assertSee('Renamed section')
++            ->assertDontSee('Approved override')->assertDontSee('225.00')->assertDontSee('250.00')->assertDontSee($pending->reason);
++        $this->get($stallDetail)->assertOk()->assertDontSee('Initial assessed daily base rent')->assertDontSee($profile);
++        $this->get('/reports/rental-overrides')->assertForbidden();
++        $this->get('/map?computation_mode=manual_override')->assertForbidden();
++        $this->assignment->update(['status'=>'ended', 'end_date'=>'2030-02-28']);
++        $this->actingAs($this->requester)->get($profile.'&period=2030-04')->assertOk()->assertSee('Initial assessment')
++            ->assertSee('Override history')->assertDontSee('Request manual override');
++        $this->get($this->url.'?period=2030-04')->assertOk()->assertSee($pending->reason)->assertSee('Expired');
++    }
++
++    public function test_report_filters_are_shared_by_screen_and_export(): void
++    {
++        $approved = $this->pending(['reason'=>'Approved fixture', 'effective_until'=>'2030-02-28']);
++        app(RentalOverrideService::class)->approve($this->reviewer, $approved, RentalOverrideService::fingerprint($approved));
++        $this->pending(['reason'=>'=Pending fixture', 'effective_from'=>'2030-03-01']);
++        $this->actingAs($this->reviewer);
++        $url = '/reports/rental-overrides?status=pending&as_of=2030-03-01&section_id='.$this->section->id;
++        $this->get($url)->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
++        $this->get($url.'&format=print')->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
++        $csv = $this->get($url.'&format=csv')->assertOk()->streamedContent();
++        $this->assertStringContainsString("'=Pending fixture", $csv);
++        $this->assertStringNotContainsString('Approved fixture', $csv);
++        $xlsx = $this->get($url.'&format=xlsx')->assertOk()->streamedContent();
++        $file = tempnam(sys_get_temp_dir(), 'override-report');
++        try {
++            file_put_contents($file, $xlsx);
++            $book = (new \PhpOffice\PhpSpreadsheet\Reader\Xlsx())->load($file);
++            $cells = json_encode($book->getActiveSheet()->toArray());
++            $this->assertStringContainsString('=Pending fixture', $cells);
++            $this->assertStringNotContainsString('Approved fixture', $cells);
++            $book->disconnectWorksheets();
++        } finally {
++            unlink($file);
++        }
++        $pdfReasons = null;
++        \Illuminate\Support\Facades\View::composer('reports.print', function ($view) use (&$pdfReasons) {
++            $pdfReasons = $view->getData()['rows']->pluck('reason')->all();
++        });
++        $pdf = $this->get($url.'&format=pdf')->assertOk()->assertHeader('Content-Type', 'application/pdf');
++        $this->assertStringStartsWith('%PDF', $pdf->getContent());
++        $this->assertSame(['=Pending fixture'], $pdfReasons);
++        $this->get('/reports/rental-overrides?status=expired&as_of=2030-03-01')
++            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture');
++        $this->get('/reports/rental-overrides?computation_mode=manual_override&as_of=2030-02-15')
++            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture')
++            ->assertViewHas('rows', function ($rows) {
++                $row = $rows->first();
++                return $rows->total() === 1 && $row->computation_mode === 'manual_override' &&
++                    $row->applicable_daily_rent == 225.00 && $row->applicable_daily_difference == -25.00;
++            });
++        $this->get('/reports/rental-assessments?computation_mode=manual_override')
++            ->assertOk()->assertSee('No matching records.');
++        $this->get('/reports/stall-master')->assertOk()->assertDontSee('name="computation_mode"', false);
++    }
++
++    public function test_pending_profile_state_and_assessment_mode_respect_override_visibility(): void
++    {
++        $pending = $this->pending(['effective_until'=>'2030-02-28']);
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
++        $this->get($profile)->assertOk()->assertSee('1 pending request')->assertDontSee('Approved override applies');
++
++        $service = app(RentalOverrideService::class);
++        $service->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        Carbon::setTestNow('2030-02-01');
++        app(\App\Services\RentalCalculationService::class)->assess($this->reviewer, $this->assignment, '2030-02', 'billing');
++        Carbon::setTestNow('2030-04-01');
++        $report = '/reports/rental-assessments?as_of=2030-04-01';
++        $this->actingAs($this->reviewer)->get($report.'&computation_mode=manual_override')->assertOk()
++            ->assertViewHas('rows', fn ($rows) => $rows->total() === 1 && $rows->first()->period === '2030-02' &&
++                $rows->first()->computation_mode === 'manual_override');
++        $this->actingAs($this->user('Collector', 'Authorized Collection Officer'))->get($report)->assertOk()
++            ->assertDontSee('name="computation_mode"', false)->assertDontSee('manual_override')->assertSee('225');
++        $this->get($report.'&computation_mode=manual_override')->assertForbidden();
++    }
++
++    public function test_report_forms_render_only_supported_scope_and_date_filters(): void
++    {
++        $this->actingAs($this->reviewer)->get('/reports/stall-master')->assertOk()
++            ->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
++            ->assertDontSee('name="tenant_id"', false)->assertDontSee('name="recorded_by"', false);
++        $this->get('/reports/audit-trail')->assertOk()
++            ->assertSee('name="from"', false)->assertDontSee('name="stall_id"', false);
++        $this->get('/reports/rental-overrides')->assertOk()
++            ->assertSee('name="as_of"', false)->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
++            ->assertDontSee('name="recorded_by"', false);
++    }
++
++    private function user(string $name, string $role): User
++    {
++        $user = User::create(['name'=>$name, 'email'=>strtolower($name).'@example.test', 'password'=>'unused', 'active'=>true]);
++        return $user->assignRole($role);
++    }
++
++    private function terms(array $changes = []): array
++    {
++        return array_replace(['submission_key'=>(string) Str::uuid(), 'override_type'=>'rate_per_sqm',
++            'override_rate_per_sqm'=>'22.50', 'effective_from'=>'2030-02-01', 'reason'=>'Synthetic override reason'], $changes);
++    }
++
++    private function pending(array $changes = []): RentalOverride
++    {
++        $service = app(RentalOverrideService::class);
++        return $service->submit($this->requester, $service->saveDraft($this->requester, $this->assignment, $this->terms($changes)));
++    }
++}
+--- before/tests/Feature/SectionManagementTest.php
++++ after/tests/Feature/SectionManagementTest.php
+@@ -118,30 +118,33 @@
+         $this->stall($inactive, 'RETAINED-STALL');
+         $this->stall($foreign, 'FOREIGN-STALL');
+ 
+         foreach (['/map', '/manage/stalls'] as $page) {
+             $query = $page.'?market_id='.$market->id.'&section_id=';
+             $this->get($query.$foreign->id)->assertOk()->assertSee('LOCAL-STALL')->assertSee('RETAINED-STALL')->assertDontSee('FOREIGN-STALL');
+             $this->get($query.$inactive->id)->assertOk()->assertSee('RETAINED-STALL')->assertDontSee('LOCAL-STALL');
+         }
+     }
+ 
+-    public function test_map_and_stall_list_render_zero_as_a_section_name(): void
++    public function test_section_and_stall_views_preserve_literal_zero_names_and_descriptions(): void
+     {
+         $this->operator();
+         $market = $this->market('A');
+         $section = $this->section($market, 'A', '0');
++        $section->update(['description' => '0']);
+         $stall = $this->stall($section, 'ZERO-SECTION-STALL');
+ 
+         foreach (['/map', '/manage/stalls', '/map/stalls/'.$stall->id] as $page) {
+             $this->get($page)->assertOk()->assertSee($stall->code)->assertDontSee('Unknown section');
+         }
++        $this->get('/manage/stalls/'.$stall->id)->assertOk()->assertSee('<dt>Section</dt><dd>0</dd>', false);
++        $this->get('/manage/sections/'.$section->id)->assertOk()->assertSee('<dt>Description</dt><dd class="whitespace-pre-line">0</dd>', false);
+     }
+ 
+     public function test_stall_options_and_backend_reject_inactive_or_other_market_sections(): void
+     {
+         $this->operator();
+         $a = $this->market('A');
+         $b = $this->market('B');
+         $active = $this->section($a, 'A', 'Fictional local active');
+         $inactive = $this->section($a, 'B', 'Fictional local inactive', 'inactive');
+         $foreign = $this->section($b, 'A', 'Fictional foreign active');

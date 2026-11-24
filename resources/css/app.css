@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+ body { @apply bg-[#f3f6fb] text-slate-800 antialiased; font-family:"Segoe UI",Arial,sans-serif; }
+ h1 { @apply text-2xl lg:text-3xl font-bold tracking-tight text-navy; } h2 { @apply text-lg font-semibold text-navy; } h3 { @apply font-semibold text-navy; }
+ label { @apply block text-sm font-medium text-slate-700 mb-1 mt-3; }
+ input:not([type=checkbox]),select,textarea { @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900; }
+ input[type=checkbox] { @apply w-4 h-4 accent-brand; } input,textarea{caret-color:#1d67d7} input::placeholder { @apply text-slate-500; }
+ :focus-visible{outline:3px solid #1d67d7;outline-offset:3px} a{@apply underline-offset-4} ::selection{background:#cfe1fb;color:#11253f} td,th{font-variant-numeric:tabular-nums}
+}
+@layer components {
+ .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50 disabled:cursor-wait;min-height:44px; }
+ .btn.secondary { @apply bg-blue-50 text-blue-900 hover:bg-blue-100; } .btn.danger{@apply bg-red-50 text-red-800 hover:bg-red-100}
+ .panel { @apply rounded-xl border border-slate-200 bg-white p-5 lg:p-6; }
+ .toolbar { @apply flex flex-wrap items-end gap-3; } .toolbar label{@apply mt-0} .toolbar>div{@apply min-w-[140px] max-w-full}
+ .tablewrap{@apply relative overflow-x-auto} .tablewrap table{@apply w-full text-left text-sm} .tablewrap th{@apply bg-slate-50 px-3 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600} .tablewrap td{@apply border-b border-slate-100 px-3 py-3.5 align-top} .tablewrap tbody tr:hover{@apply bg-slate-50}
+ .notice{@apply mb-5 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900} .notice.error{@apply bg-red-50 text-red-800} .notice.success{@apply bg-emerald-50 text-emerald-800}
+ .empty{@apply p-8 text-center text-slate-600} .badge{@apply inline-block rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700}
+ .status-occupied{@apply bg-emerald-50 text-emerald-800 border-emerald-200} .status-vacant{@apply bg-slate-100 text-slate-700 border-slate-300} .status-reserved{@apply bg-amber-50 text-amber-900 border-amber-300} .status-maintenance{@apply bg-red-50 text-red-800 border-red-200} .status-inactive{@apply bg-slate-700 text-white border-slate-600}
+ .navlink{@apply block rounded-lg px-3 py-2.5 text-sm text-blue-100 hover:bg-[#24466c] hover:text-white} .navlink.active{@apply bg-[#24466c] text-white font-semibold}
+ .detailrow{@apply flex justify-between gap-5 border-b border-slate-100 py-3 text-sm} .detailrow dt{@apply text-slate-600} .detailrow dd{@apply text-right font-medium break-words}
+ .stall{@apply border rounded-lg p-3 text-center min-h-[76px] hover:ring-2 hover:ring-brand} .stall[aria-pressed=true]{@apply ring-2 ring-brand ring-offset-2}
+}
+@media print{aside,header,.no-print{display:none!important}main{margin:0!important;padding:0!important}.panel{border:0}}
+@media(prefers-reduced-motion:no-preference){.stall{transition:box-shadow .15s ease-out}.details-loaded{animation:detail-enter .18s ease-out}@keyframes detail-enter{from{transform:translateX(6px)}to{transform:translateX(0)}}}
+
+/* Permission-filtered application navigation. */
+.sidebar-shell{position:fixed;inset:0 auto 0 0;z-index:40;display:flex;flex-direction:column;width:min(19rem,calc(100vw - 3rem));background:#11253f;color:#fff;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 12px 30px rgba(17,37,63,.2)}
+.sidebar-open .sidebar-shell{transform:translateX(0)}
+.sidebar-overlay:not([hidden]){position:fixed;inset:0;z-index:30;background:rgba(15,23,42,.62)}
+.sidebar-brand{display:flex;align-items:center;gap:.5rem;flex:none;padding:1rem 1.1rem;border-bottom:1px solid #35506e;min-height:76px}
+.sidebar-brand-link{display:flex;align-items:center;gap:.75rem;min-width:0;color:white;text-decoration:none}
+.sidebar-mark{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;border-radius:.7rem;background:#1d67d7;font-size:.8rem;font-weight:800;letter-spacing:.03em}
+.sidebar-brand-text{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}.sidebar-brand-text strong{font-size:1.15rem}.sidebar-brand-text small{color:#c5d9f6;font-size:.72rem;margin-top:.2rem}
+.sidebar-close{margin-left:auto;min-width:44px;min-height:44px;border-radius:.5rem;font-size:1.6rem;color:#dbeafe}.sidebar-close:hover{background:#24466c}
+.sidebar-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:.75rem .7rem}
+.nav-group{border-bottom:1px solid #35506e;padding:.3rem 0}.nav-group:last-child{border:0}
+.nav-group-heading{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.5rem .65rem;border-radius:.55rem;color:#bcd4f4;cursor:pointer;font-size:.72rem;font-weight:700;letter-spacing:.075em;text-transform:uppercase;list-style:none}
+.nav-group-heading::-webkit-details-marker{display:none}.nav-group-heading:hover,.nav-group-heading:focus-visible{background:#24466c;color:white}.nav-group-label{flex:1;white-space:nowrap}
+.nav-chevron{font-size:1.2rem;line-height:1;transition:transform .2s}.nav-group[open] .nav-chevron{transform:rotate(180deg)}
+.nav-group-items{overflow:hidden}.nav-icon{width:1.2rem;height:1.2rem;flex:none}.navlink{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:.1rem 0;padding:.6rem .65rem .6rem 1rem;border-radius:.55rem;color:#dbeafe;text-decoration:none;font-size:.84rem;line-height:1.2}.navlink:hover{background:#24466c;color:white}.navlink.active{background:#2b5888;color:white;font-weight:700;box-shadow:inset 3px 0 #82b5ff}.nav-item-label{white-space:nowrap}
+.sidebar-account{flex:none;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:1rem 1.1rem;border-top:1px solid #35506e;background:#102138}
+.sidebar-avatar{display:grid;place-items:center;flex:none;width:2.3rem;height:2.3rem;border-radius:50%;background:#355b86;font-weight:700}.sidebar-account-text{min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.3}.sidebar-account-text strong,.sidebar-account-text small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-account-text strong{font-size:.82rem}.sidebar-account-text small{color:#c5d9f6;font-size:.7rem}.sidebar-logout{width:100%}.sidebar-logout button{display:flex;align-items:center;gap:.75rem;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:.55rem;color:#dbeafe;font-size:.84rem}.sidebar-logout button:hover{background:#24466c;color:white}
+.sidebar-open{overflow:hidden}
+@media(min-width:1024px){.sidebar-shell{position:sticky;top:0;z:auto;width:16rem;height:100vh;flex:none;transform:none;box-shadow:none;transition:width .2s ease}.sidebar-overlay{display:none!important}.sidebar-close{display:none}.sidebar-compact .sidebar-shell{width:4.75rem}.sidebar-compact .sidebar-brand{justify-content:center;padding:.8rem}.sidebar-compact .sidebar-brand-text,.sidebar-compact .nav-group-label,.sidebar-compact .nav-chevron,.sidebar-compact .nav-item-label,.sidebar-compact .sidebar-account-text{display:none}.sidebar-compact .nav-group-heading{display:none}.sidebar-compact .sidebar-nav{padding:.7rem .45rem}.sidebar-compact .nav-group{padding:.2rem 0}.sidebar-compact .navlink{justify-content:center;padding:.7rem}.sidebar-compact .sidebar-account{justify-content:center;padding:.7rem .4rem}.sidebar-compact .sidebar-logout button{justify-content:center;padding:.55rem}}
+/* Keep native navigation available until the drawer controls are ready. */
+body:not(.sidebar-enhanced) :is([data-menu],[data-sidebar-compact],[data-sidebar-close]){display:none}
+@media not all and (min-width:1024px){
+ .sidebar-enhanced .sidebar-shell{visibility:hidden}
+ .sidebar-open .sidebar-shell{visibility:visible}
+ body:not(.sidebar-enhanced) .sidebar-shell{position:static;width:auto;transform:none;box-shadow:none}
+ .nav-item-label,.sidebar-brand-text{white-space:normal}
+}
+@media(prefers-reduced-motion:reduce){.sidebar-shell,.nav-chevron{transition:none!important}}

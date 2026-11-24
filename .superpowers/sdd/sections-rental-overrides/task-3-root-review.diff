@@ -1,0 +1,2221 @@
+Changed files (29):
+app/Http/Controllers/MapController.php
+app/Http/Controllers/RentalOverrideController.php
+app/Http/Controllers/ReportController.php
+app/Http/Controllers/TenantController.php
+app/Http/Requests/RentalOverrideRequest.php
+app/Models/StallAssignment.php
+app/Services/Reports.php
+app/Support/AssignmentRental.php
+app/Support/Navigation.php
+config/navigation.php
+public/assets/app.css
+public/assets/rental-overrides.js
+resources/js/rental-overrides.js
+resources/views/map/details.blade.php
+resources/views/map/index.blade.php
+resources/views/rental-overrides/decision.blade.php
+resources/views/rental-overrides/form.blade.php
+resources/views/rental-overrides/index.blade.php
+resources/views/rental-overrides/quote.blade.php
+resources/views/reports/print.blade.php
+resources/views/reports/show.blade.php
+resources/views/tenants/form.blade.php
+resources/views/tenants/index.blade.php
+resources/views/tenants/show.blade.php
+routes/rental-overrides.php
+routes/web.php
+scripts/build-assets.js
+tests/Feature/RentalOverrideWorkflowTest.php
+tests/Feature/UnifiedIntegrationTest.php
+
+File comparison review package (no Git repository). Base: .qa\sections-overrides-checkpoint\after-task-2-fix1.zip
+--- before/app/Http/Controllers/MapController.php
++++ after/app/Http/Controllers/MapController.php
+@@ -1,32 +1,39 @@
+ <?php
+ namespace App\Http\Controllers;
+ use App\Models\{Market, MarketLayout, Stall, StallLayoutPosition, Payment};
+ use App\Services\Audit;
++use App\Support\AssignmentRental;
++use Carbon\Carbon;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Validation\ValidationException;
+ class MapController extends Controller
+ {
+     public function index(Request $request)
+     {
+         $this->authorize("map.view");
+         if ($request->filled('business_category_id')) {
+             $this->authorize('tenants.view');
+         }
+-        $request->validate([
++        $canSeeComputation = $this->canSeeComputation($request);
++        abort_if($request->anyFilled(['period','computation_mode']) && !$canSeeComputation, 403);
++        $filters = $request->validate([
+             "market_id" => "nullable|integer|exists:markets,id",
+             "section_id" => "nullable|integer",
+             "status" => "nullable|in:occupied,vacant,reserved,maintenance,inactive",
+             "location_type" => "nullable|in:inner,outer,unclassified",
+             "business_category_id" => "nullable|integer|exists:business_categories,id",
++            "period" => "nullable|date_format:Y-m",
++            "computation_mode" => "nullable|in:automatic,manual_override",
+         ]);
++        $period = $filters['period'] ?? today()->format('Y-m');
+         $markets = Market::orderBy("name")->get();
+         $market = $markets->firstWhere("id", (int) $request->market_id) ?: $markets->first();
+         $stalls = collect();
+         $sections = collect();
+         $sectionStalls = collect();
+         $selectedSection = null;
+         $layout = null;
+         if ($market) {
+             $sections = $market->sections()->inDisplayOrder()->get();
+             $q = $market->stalls()->with("position", "section");
+@@ -38,30 +45,50 @@
+                 $q->where("status", $request->status);
+             }
+             if ($request->input('location_type') === 'unclassified') {
+                 $q->whereNull('location_type');
+             } elseif ($request->filled('location_type')) {
+                 $q->where('location_type',$request->input('location_type'));
+             }
+             if ($request->filled('business_category_id')) {
+                 $q->whereHas('currentAssignment.business',function ($q) use ($request) { $q->where('business_category_id',$request->input('business_category_id')); });
+             }
++            if (isset($filters['computation_mode'])) {
++                $first = $period.'-01';
++                $last = Carbon::parse($first)->endOfMonth()->toDateString();
++                $q->whereHas('currentAssignment', function ($assignment) use ($filters, $first, $last) {
++                    $assignment->where('start_date', '<=', $last)
++                        ->where(fn ($term) => $term->whereNull('end_date')->orWhere('end_date', '>=', $first))
++                        ->whereHas('agreement.assessment', fn ($assessment) => $assessment->where('purpose', 'initial')
++                            ->whereColumn('rental_assessments.stall_assignment_id', 'stall_assignments.id'));
++                    $coverage = fn ($overrides) => $overrides->covering($first, $first);
++                    if ($filters['computation_mode'] === 'manual_override') {
++                        $assignment->whereHas('rentalOverrides', $coverage);
++                    } else {
++                        $assignment->whereDoesntHave('rentalOverrides', $coverage);
++                    }
++                });
++            }
+             $stalls = $q->orderBy("code")->get();
+             $sectionStalls = $stalls->groupBy('market_section_id');
+             $layout = MarketLayout::where("market_id", $market->id)->first();
+         }
+         $businessCategories = $request->user()->can('tenants.view') ? \App\Models\BusinessCategory::orderBy('name')->get() : collect();
+-        return view('map.index', compact('markets', 'market', 'stalls', 'layout', 'businessCategories', 'sections', 'sectionStalls', 'selectedSection'));
++        return view('map.index', compact('markets', 'market', 'stalls', 'layout', 'businessCategories', 'sections', 'sectionStalls',
++            'selectedSection', 'canSeeComputation', 'period'));
+     }
+     public function details(Request $request, Stall $stall)
+     {
+         $this->authorize("view", $stall);
++        $canSeeComputation = $this->canSeeComputation($request);
++        abort_if($request->filled('period') && !$canSeeComputation, 403);
++        $period = $request->validate(['period'=>'nullable|date_format:Y-m'])['period'] ?? today()->format('Y-m');
+         $stall->load("market", "section", "category");
+         $assignment = null;
+         $history = collect();
+         $payments = collect();
+         $balance = "0.00";
+         if ($request->user()->can("tenants.view")) {
+             $assignment = $stall
+                 ->currentAssignment()
+                 ->with("tenant", "business.businessCategory", "agreement.assessment")
+                 ->first();
+@@ -78,26 +105,32 @@
+         }
+         if ($request->user()->can("payments.view")) {
+             $payments = Payment::effective()
+                 ->whereHas("allocations.bill", function ($q) use ($stall) {
+                     $q->where("stall_id", $stall->id);
+                 })
+                 ->latest("payment_date")
+                 ->limit(5)
+                 ->get();
+         }
+-        $assessment = $assignment && $assignment->agreement ? $assignment->agreement->assessment : null;
++        $assessment = $assignment ? AssignmentRental::initial($assignment) : null;
++        [$quote, $quoteError] = $assignment && $canSeeComputation ? AssignmentRental::quote($assignment, $period) : [null, null];
+         $lease = $assignment && $request->user()->can('contracts.view') ? \App\Models\LeaseContract::where('stall_assignment_id',$assignment->id)->latest('id')->first() : null;
+         return response()->view(
+             "map.details",
+-            compact("stall", "assignment", "history", "payments", "balance", "assessment", "lease"),
++            compact("stall", "assignment", "history", "payments", "balance", "assessment", "lease", "canSeeComputation", "period", "quote", "quoteError"),
+         )->header('Cache-Control','private, no-store');
++    }
++    private function canSeeComputation(Request $request): bool
++    {
++        $user = $request->user();
++        return $user->can('tenants.view') && $user->can('billing.view') && $user->can('rentals.override.view');
+     }
+     public function editor(Market $market)
+     {
+         $this->authorize("markets.manage");
+         return view("map.editor", [
+             "market" => $market,
+             "layout" => MarketLayout::where("market_id", $market->id)->first(),
+             "stalls" => $market->stalls()->with("position")->orderBy("code")->get(),
+         ]);
+     }
+--- before/app/Http/Controllers/RentalOverrideController.php
++++ after/app/Http/Controllers/RentalOverrideController.php
+@@ -0,0 +1,195 @@
++<?php
++
++namespace App\Http\Controllers;
++
++use App\Http\Requests\RentalOverrideRequest;
++use App\Models\{RentalOverride, StallAssignment, Tenant};
++use App\Services\RentalOverrideService;
++use App\Support\AssignmentRental;
++use Carbon\Carbon;
++use Illuminate\Http\Request;
++use Illuminate\Support\Arr;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Str;
++use Illuminate\Validation\ValidationException;
++
++class RentalOverrideController extends Controller
++{
++    private $service;
++
++    public function __construct(RentalOverrideService $service)
++    {
++        $this->service = $service;
++    }
++
++    public function index(Request $request, Tenant $tenant, StallAssignment $assignment)
++    {
++        $this->scope($tenant, $assignment, 'history');
++        $period = $this->period($request);
++        $rows = $assignment->rentalOverrides()->with(['requester:id,name', 'approver:id,name', 'initialAssessment'])
++            ->latest('revision')->paginate(10)->withQueryString();
++        $user = $request->user();
++        $review = [];
++        $fingerprints = [];
++        foreach ($rows as $row) {
++            $row->setRelation('assignment', $assignment);
++            if ($row->status === 'pending' && $user->can('rentals.override.approve') && (int) $row->requested_by !== (int) $user->id) {
++                $review[$row->id] = RentalOverrideService::review($row);
++            }
++            if ($row->status === 'draft' && $user->can('rentals.override.request') && (int) $row->requested_by === (int) $user->id) {
++                $fingerprints[$row->id] = RentalOverrideService::fingerprint($row);
++            }
++        }
++        [$quote, $quoteError] = AssignmentRental::quote($assignment, $period);
++        $earliest = $user->can('rentals.override.request') ? AssignmentRental::earliestRequestMonth($assignment) : null;
++        return $this->privateView('rental-overrides.index', compact('tenant', 'assignment', 'rows', 'period', 'quote', 'quoteError', 'earliest', 'review', 'fingerprints'));
++    }
++
++    public function create(Request $request, Tenant $tenant, StallAssignment $assignment)
++    {
++        $this->scope($tenant, $assignment, 'request');
++        $period = $this->period($request);
++        $input = $request->validate([
++            'source_override_id'=>'nullable|integer|min:1', 'computation_mode'=>'nullable|in:automatic,manual_override',
++        ]);
++        $earliest = AssignmentRental::earliestRequestMonth($assignment);
++        if (($input['computation_mode'] ?? null) === 'automatic') {
++            if ($earliest && $request->user()->can('rentals.override.history') &&
++                $assignment->rentalOverrides()->covering($earliest, $assignment->end_date)->exists()) {
++                return $this->historyRedirect($request, $tenant, $assignment)->with('rental_mode_notice',
++                    'An authorized reviewer can choose Return to automatic on the approved request and set a prospective effective date.');
++            }
++            return $this->profileRedirect($request, $tenant)->with('rental_mode_notice',
++                'Automatic rent applies by default. An approved override can end through an authorized return to automatic or its recorded expiry.');
++        }
++        if (!$earliest) {
++            return $this->historyRedirect($request, $tenant, $assignment)->withErrors(['assignment'=>'Choose an active assessed assignment with a full prospective month.']);
++        }
++        $source = isset($input['source_override_id']) ? RentalOverride::where('stall_assignment_id', $assignment->id)
++            ->where('status', '!=', 'draft')->findOrFail($input['source_override_id']) : null;
++        if ($source) {
++            $this->authorize('rentals.override.history');
++        }
++        $draft = new RentalOverride(['submission_key'=>(string) Str::uuid(), 'source_override_id'=>optional($source)->id,
++            'override_type'=>optional($source)->override_type ?? 'rate_per_sqm']);
++        return $this->form($tenant, $assignment, $draft, $earliest, $period);
++    }
++
++    public function edit(Request $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        $this->scope($tenant, $assignment, 'request');
++        abort_unless((int) $override->stall_assignment_id === (int) $assignment->id && $override->status === 'draft', 404);
++        abort_unless((int) $override->requested_by === (int) $request->user()->id, 403);
++        return $this->form($tenant, $assignment, $override, AssignmentRental::earliestRequestMonth($assignment), $this->period($request));
++    }
++
++    public function store(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment)
++    {
++        $data = $request->validated();
++        if (isset($data['source_override_id'])) {
++            $this->authorize('rentals.override.history');
++        }
++        $row = DB::transaction(function () use ($request, $assignment, $data) {
++            $row = $this->service->saveDraft($request->user(), $assignment, $data);
++            return ($data['intent'] ?? null) === 'submit' ? $this->service->submit($request->user(), $row) : $row;
++        }, 3);
++        if ($row->status === 'draft') {
++            return redirect()->route('rental-overrides.edit', ['tenant'=>$tenant, 'assignment'=>$assignment, 'override'=>$row, 'period'=>$request->input('period')])
++                ->with('success', 'Draft saved.');
++        }
++        return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Request submitted for review.');
++    }
++
++    public function update(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        $this->service->saveDraft($request->user(), $assignment, $request->validated(), $override);
++        return redirect()->route('rental-overrides.edit', ['tenant'=>$tenant, 'assignment'=>$assignment, 'override'=>$override,
++            'period'=>$request->input('period')])->with('success', 'Draft saved.');
++    }
++
++    public function preview(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment)
++    {
++        $amounts = $this->service->preview($request->user(), $assignment, $request->validated());
++        return response()->json(Arr::only($amounts, [
++            'computation_mode', 'rental_override_id', 'automatic_rate_per_sqm', 'automatic_daily_rental', 'daily_rental',
++            'rental_difference', 'monthly_rental', 'monthly_cusa', 'total_monthly_rental_cusa', 'billing_days',
++            'equivalent_rate_per_sqm', 'contract_rate_consistent', 'out_of_range', 'zero_rent',
++        ]))->header('Cache-Control', 'private, no-store');
++    }
++
++    public function submit(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        abort_unless((int) $override->requested_by === (int) $request->user()->id, 403);
++        if ($override->status === 'draft' && !hash_equals(RentalOverrideService::fingerprint($override), $request->input('draft_fingerprint'))) {
++            throw ValidationException::withMessages(['draft_fingerprint'=>'Review the latest saved draft before submitting.']);
++        }
++        $this->service->submit($request->user(), $override);
++        return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Request submitted for review.');
++    }
++
++    public function approve(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        $this->service->approve($request->user(), $override, $request->input('fingerprint'));
++        return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Override approved for the recorded effective period.');
++    }
++
++    public function reject(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        $this->service->reject($request->user(), $override, $request->input('reason'));
++        return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Request rejected. Applicable rent is unchanged.');
++    }
++
++    public function revoke(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
++    {
++        $this->service->revoke($request->user(), $override, $request->validated());
++        return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Return to automatic recorded for the selected effective date.');
++    }
++
++    private function scope(Tenant $tenant, StallAssignment $assignment, string $action): void
++    {
++        $this->authorize('view', $tenant);
++        $this->authorize('rentals.override.view');
++        $this->authorize('rentals.override.'.$action);
++        abort_unless((int) $assignment->tenant_id === (int) $tenant->id, 404);
++        $assignment->setRelation('tenant', $tenant);
++        $assignment->loadMissing(['business', 'stall.section', 'agreement.assessment']);
++    }
++
++    private function form(Tenant $tenant, StallAssignment $assignment, RentalOverride $draft, ?string $earliest, string $period)
++    {
++        $assessment = AssignmentRental::initial($assignment);
++        $fingerprint = $draft->exists ? RentalOverrideService::fingerprint($draft) : null;
++        $end = $assignment->end_date ? Carbon::parse($assignment->end_date) : null;
++        $lastFullMonth = $end && $end->day !== $end->daysInMonth
++            ? $end->subMonthNoOverflow()->endOfMonth()->toDateString() : $assignment->end_date;
++        $selectedStart = $period.'-01';
++        $defaultStart = $earliest && $selectedStart >= $earliest && (!$lastFullMonth || $selectedStart <= $lastFullMonth)
++            ? $selectedStart : $earliest;
++        return $this->privateView('rental-overrides.form', compact('tenant', 'assignment', 'draft', 'earliest', 'assessment',
++            'period', 'fingerprint', 'lastFullMonth', 'defaultStart'));
++    }
++
++    private function period(Request $request): string
++    {
++        return $request->validate(['period'=>'nullable|date_format:Y-m'])['period'] ?? today()->format('Y-m');
++    }
++
++    private function historyRedirect(Request $request, Tenant $tenant, StallAssignment $assignment)
++    {
++        $period = $request->input('period');
++        return $request->user()->can('rentals.override.history')
++            ? redirect()->route('rental-overrides.index', compact('tenant', 'assignment', 'period'))
++            : $this->profileRedirect($request, $tenant);
++    }
++
++    private function profileRedirect(Request $request, Tenant $tenant)
++    {
++        return redirect()->route('records.show', ['tenants', $tenant->id, 'tab'=>$request->user()->can('billing.view') ? 'rental' : 'overview',
++            'period'=>$request->input('period')]);
++    }
++
++    private function privateView(string $view, array $data)
++    {
++        return response()->view($view, $data)->header('Cache-Control', 'private, no-store');
++    }
++}
+--- before/app/Http/Controllers/ReportController.php
++++ after/app/Http/Controllers/ReportController.php
+@@ -9,81 +9,102 @@
+     public function index()
+     {
+         $this->authorize("reports.view");
+         return view("reports.index", ["types" => Reports::TYPES]);
+     }
+     public function show(Request $r, $type)
+     {
+         abort_unless(isset(Reports::TYPES[$type]), 404);
+         $spec = Reports::TYPES[$type];
+         $this->authorize($spec[1]);
++        $canSeeAssessmentMode = $r->user()->can('rentals.override.view');
++        if ($type === 'rental-assessments' && $r->filled('computation_mode')) {
++            $this->authorize('rentals.override.view');
++        }
+         if (in_array($type, ["monthly-billing", "receivables", "overdue", "payment-history"])) {
+             $this->authorize("reports.personal");
+         }
+         $rules = [
+             "market_id" => "nullable|integer|exists:markets,id",
+             "section_id" => "nullable|integer|exists:market_sections,id",
+             "stall_id" => "nullable|integer|exists:stalls,id",
+             "tenant_id" =>
+                 ($type === "tenant-statement" ? "required" : "nullable") .
+                 "|integer|exists:tenants,id",
+             "recorded_by" => "nullable|integer|exists:users,id",
+             "business_category_id" => "nullable|integer|exists:business_categories,id",
+             "location_type" => "nullable|in:inner,outer,unclassified",
+             "from" => "nullable|date_format:Y-m-d",
+             "to" => "nullable|date_format:Y-m-d|after_or_equal:from",
+             "status" => "nullable|in:draft,posted,reversed,void",
++            "computation_mode" => in_array($type, ['rental-assessments', 'rental-overrides'], true) ? "nullable|in:automatic,manual_override" : 'prohibited',
++            "as_of" => in_array($type, ['rental-assessments', 'rental-overrides'], true) ? "nullable|date_format:Y-m-d" : 'prohibited',
+             "format" => "nullable|in:csv,xlsx,pdf,print",
+         ];
+-        if (in_array($type,['business-categories','rental-assessments','lease-contract-registry'],true)) {
++        if (in_array($type,['business-categories','rental-assessments','rental-overrides','lease-contract-registry'],true)) {
+             foreach (array_diff(array_keys(Reports::scopeFilters('legacy')),array_keys(Reports::scopeFilters($type))) as $unsupported) {
+                 $rules[$unsupported] = 'prohibited';
+             }
+             if ($type === 'business-categories') {
+                 $rules['location_type'] = 'prohibited';
+             }
+             $rules['status'] = $type === 'lease-contract-registry' ? 'nullable|in:draft,ready,issued,signed,active,expired,terminated,void' : 'prohibited';
+         }
++        if ($type === 'rental-overrides') {
++            foreach (['from', 'to', 'location_type'] as $unsupported) {
++                $rules[$unsupported] = 'prohibited';
++            }
++            $rules['status'] = 'nullable|in:draft,pending,approved,rejected,revoked,expired';
++        }
+         $f = $r->validate($rules);
+-        $q = Reports::query($type, $f);
++        if ($type === 'rental-overrides') {
++            $f['as_of'] = $f['as_of'] ?? today()->toDateString();
++        }
++        $q = Reports::query($type, $f, $canSeeAssessmentMode);
+         $title = $spec[0];
+-        $format = $r->format;
++        $format = $f['format'] ?? null;
++        $reportNote = $type === 'rental-overrides'
++            ? 'Applicability on '.$f['as_of'].' uses current recorded decisions and the assignment term. Proposed values record the request. Issued assessments retain their saved values.'
++            : null;
+         if (!$format) {
+-            return view("reports.show", [
+-                "rows" => $q->paginate(30)->withQueryString(),
++            return response()->view("reports.show", [
++                "rows" => $q->paginate(30)->appends($f),
+                 "title" => $title,
+                 "type" => $type,
+-            ]);
++                "filters" => $f,
++                "reportNote" => $reportNote,
++                "canSeeAssessmentMode" => $canSeeAssessmentMode,
++            ])->header('Cache-Control', 'private, no-store');
+         }
+         abort_if(
+             (clone $q)->getCountForPagination() > 5000,
+             422,
+             "Export exceeds 5,000 rows. Narrow the date or market filters.",
+         );
+         $rows = $q->get();
+         $columns = $rows->isEmpty() ? ["No records"] : array_keys((array) $rows->first());
+         if ($format === "print") {
+-            return view("reports.print", compact("rows", "columns", "title"));
++            return response()->view("reports.print", compact("rows", "columns", "title", "reportNote"))->header('Cache-Control', 'private, no-store');
+         }
+         if ($format === "csv") {
+             return response()->streamDownload(
+                 function () use ($rows, $columns) {
+                     $out = fopen("php://output", "w");
+                     fwrite($out, "\xEF\xBB\xBF");
+                     fputcsv($out, $columns);
+                     foreach ($rows as $row) {
+                         fputcsv($out, array_map([Reports::class, "csvCell"], (array) $row));
+                     }
+                     fclose($out);
+                 },
+                 $type . ".csv",
+-                ["Content-Type" => "text/csv; charset=UTF-8"],
++                ["Content-Type" => "text/csv; charset=UTF-8", "Cache-Control" => "private, no-store"],
+             );
+         }
+         if ($format === "xlsx") {
+             return response()->streamDownload(
+                 function () use ($rows, $columns) {
+                     $book = new Spreadsheet();
+                     $sheet = $book->getActiveSheet();
+                     $all = [array_values($columns)];
+                     foreach ($rows as $row) {
+                         $all[] = array_values((array) $row);
+@@ -100,26 +121,28 @@
+                     }
+                     $sheet->getStyle("1:1")->getFont()->setBold(true);
+                     $sheet->freezePane("A2");
+                     (new Xlsx($book))->save("php://output");
+                     $book->disconnectWorksheets();
+                 },
+                 $type . ".xlsx",
+                 [
+                     "Content-Type" =>
+                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
++                    "Cache-Control" => "private, no-store",
+                 ],
+             );
+         }
+         $pdf = new Dompdf([
+             "isRemoteEnabled" => false,
+             "isPhpEnabled" => false,
+             "chroot" => public_path(),
+         ]);
+-        $pdf->loadHtml(view("reports.print", compact("rows", "columns", "title"))->render());
++        $pdf->loadHtml(view("reports.print", compact("rows", "columns", "title", "reportNote"))->render());
+         $pdf->setPaper("A4", "landscape");
+         $pdf->render();
+         return response($pdf->output())
++            ->header("Cache-Control", "private, no-store")
+             ->header("Content-Type", "application/pdf")
+             ->header("Content-Disposition", 'attachment; filename="' . $type . '.pdf"');
+     }
+ }
+--- before/app/Http/Controllers/TenantController.php
++++ after/app/Http/Controllers/TenantController.php
+@@ -1,15 +1,16 @@
+ <?php
+ namespace App\Http\Controllers;
+ 
+-use App\Models\{AuditLog, Business, BusinessCategory, Market, Stall, StallCategory, Tenant};
++use App\Models\{AuditLog, Business, BusinessCategory, Market, MarketSection, Stall, StallCategory, Tenant};
+ use App\Services\{Ledger, RentalCalculationService, TenantDataService};
++use App\Support\AssignmentRental;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Arr;
+ use Illuminate\Validation\Rule;
+ use Illuminate\Validation\ValidationException;
+ 
+ class TenantController extends Controller
+ {
+     private const LEASE_STATUSES = [
+         'draft'=>'Draft','ready'=>'Ready (all generated)',
+         'generated'=>'Generated, awaiting review','approved'=>'Generated, review approved',
+@@ -26,20 +27,21 @@
+             $this->authorize('contracts.view');
+         }
+         if ($request->filled('payment_status')) {
+             $this->authorize('billing.view');
+         }
+         $filters = $request->validate([
+             'q'=>'nullable|string|max:100','stall'=>'nullable|string|max:40',
+             'category_id'=>'nullable|integer|exists:stall_categories,id',
+             'business_category_id'=>'nullable|integer|exists:business_categories,id',
+             'market_id'=>'nullable|integer|exists:markets,id',
++            'section_id'=>'nullable|integer|exists:market_sections,id',
+             'location_type'=>'nullable|in:inner,outer,unclassified',
+             'status'=>['nullable', Rule::in(self::TENANT_STATUSES)],
+             'lease_status'=>['nullable', Rule::in(array_keys(self::LEASE_STATUSES))],
+             'payment_status'=>'nullable|in:overdue,outstanding,settled,unbilled',
+         ]);
+         $query = Tenant::query()->select('tenants.*')->with('businesses.businessCategory')
+             ->with(['assignments'=>function ($query) use ($actor) {
+                 $query->where('status', 'active')->orderBy('id')->with('stall.market');
+                 if ($actor->can('billing.view')) {
+                     $query->with('agreement.assessment');
+@@ -63,23 +65,23 @@
+         if ($request->filled('q')) {
+             $search = '%'.$filters['q'].'%';
+             $query->where(function ($query) use ($search) {
+                 $query->where('name','like',$search)->orWhere('reference','like',$search)
+                     ->orWhere('present_account_number','like',$search)->orWhere('previous_account_number','like',$search)->orWhere('phone','like',$search)
+                     ->orWhereHas('businesses', function ($businesses) use ($search) {
+                         $businesses->where('name','like',$search)->orWhere('line_of_business','like',$search);
+                     })->orWhereHas('assignments.stall', function ($stalls) use ($search) { $stalls->where('code','like',$search); });
+             });
+         }
+-        if ($request->anyFilled(['stall','category_id','market_id','location_type'])) {
++        if ($request->anyFilled(['stall','category_id','market_id','section_id','location_type'])) {
+             $query->whereHas('assignments.stall', function ($stalls) use ($filters) {
+-                foreach (['category_id'=>'stall_category_id','market_id'=>'market_id','location_type'=>'location_type'] as $filter=>$field) {
++                foreach (['category_id'=>'stall_category_id','market_id'=>'market_id','section_id'=>'market_section_id','location_type'=>'location_type'] as $filter=>$field) {
+                     if (!empty($filters[$filter])) {
+                         $filters[$filter] === 'unclassified' ? $stalls->whereNull($field) : $stalls->where($field, $filters[$filter]);
+                     }
+                 }
+                 if (!empty($filters['stall'])) {
+                     $stalls->where('code', 'like', '%'.$filters['stall'].'%');
+                 }
+             });
+         }
+         if ($request->filled('status')) {
+@@ -100,20 +102,21 @@
+             $query->whereHas('businesses', function ($businesses) use ($filters) { $businesses->where('business_category_id', $filters['business_category_id']); });
+         }
+         if ($request->filled('payment_status')) {
+             $this->filterPayments($query, $filters['payment_status']);
+         }
+         return response()->view('tenants.index', [
+             'records'=>$query->orderBy('name')->orderBy('id')->paginate(20)->withQueryString(),
+             'categories'=>StallCategory::orderBy('name')->get(),
+             'businessCategories'=>BusinessCategory::orderBy('name')->get(),
+             'markets'=>Market::orderBy('name')->get(),
++            'sections'=>MarketSection::inDisplayOrder()->get(),
+             'tenantStatuses'=>self::TENANT_STATUSES, 'leaseStatuses'=>self::LEASE_STATUSES,
+         ])->header('Cache-Control', 'private, no-store');
+     }
+ 
+     private function filterPayments($query, string $status): void
+     {
+         $posted = Ledger::bills()->whereColumn('rental_bills.tenant_id','tenants.id')->selectRaw('1');
+         $outstanding = (clone $posted)->whereRaw(Ledger::balanceSql().' > 0');
+         if ($status === 'overdue') {
+             $query->whereExists($outstanding->where('due_date', '<', today()->toDateString())->toBase());
+@@ -200,20 +203,24 @@
+             ->inActiveSection();
+     }
+ 
+     public function save($request, $id = null)
+     {
+         $service = app(TenantDataService::class);
+         $tenant = $service->save($request->user(), $request->validated(), $id);
+         $response = redirect()->route('records.show', ['tenants',$tenant->id]);
+         if (($request->input('registration_action') || !$id) && $service->hasDuplicate($tenant)) {
+             $response->with('duplicate_warning', 'Another tenant has a similar name, account number or phone. Review the tenant list before making any record corrections.');
++        }
++        if ($request->input('registration_action') === 'confirm' && $request->user()->can('rentals.override.request') &&
++            $request->user()->can('rentals.override.view') && $request->user()->can('billing.view') && $tenant->assignments()->exists()) {
++            $response->with('registered_rental_link', true);
+         }
+         return $response->with('success', $tenant->status === 'draft' ? 'Registration draft saved.' : 'Tenant saved.');
+     }
+ 
+     public function preview(Request $request, RentalCalculationService $calculator)
+     {
+         $this->authorize('tenants.manage');
+         $this->authorize('assignments.manage');
+         $data = $request->validate([
+             'tenant_id'=>'nullable|integer|exists:tenants,id','business_id'=>'nullable|integer|required_without:business_category_id',
+@@ -270,21 +277,38 @@
+                 unset($tabs[$tab]);
+             }
+         }
+         $tab = request()->query('tab', 'overview');
+         abort_unless(is_string($tab), 404);
+         abort_unless(isset($tabs[$tab]), 404);
+         $data = compact('record','tabs','tab');
+         if (in_array($tab, ['assignments','rental','helpers'], true)) {
+             $data['profileAssignments'] = $record->assignments()->with('stall.market','stall.section','stall.category','business.businessCategory')
+                 ->when($actor->can('billing.view'), function ($query) { $query->with('agreement.assessment'); })
++                ->when($tab === 'rental' && $actor->can('rentals.override.view') && $actor->can('rentals.override.history'), function ($query) {
++                    $query->withCount(['rentalOverrides as pending_override_count'=>fn ($overrides) => $overrides->where('status', 'pending')]);
++                })
+                 ->orderByDesc('start_date')->orderByDesc('id')->paginate(15)->withQueryString();
++        }
++        if ($tab === 'rental') {
++            $data['period'] = request()->validate(['period'=>'nullable|date_format:Y-m'])['period'] ?? today()->format('Y-m');
++            $data['rentalQuotes'] = [];
++            $data['requestMonths'] = [];
++            if ($actor->can('rentals.override.view')) {
++                foreach ($data['profileAssignments'] as $assignment) {
++                    $assignment->setRelation('tenant', $record);
++                    $data['rentalQuotes'][$assignment->id] = AssignmentRental::quote($assignment, $data['period']);
++                    if ($actor->can('rentals.override.request')) {
++                        $data['requestMonths'][$assignment->id] = AssignmentRental::earliestRequestMonth($assignment);
++                    }
++                }
++            }
+         }
+         if ($tab === 'helpers') {
+             $record->load('helpers');
+         }
+         if ($tab === 'businesses') {
+             $data['profileBusinesses'] = $record->businesses()->with('businessCategory')->orderBy('name')->orderBy('id')->paginate(15)->withQueryString();
+         }
+         if ($tab === 'overview') {
+             $data['businessCount'] = $record->businesses()->where('status','active')->count();
+             $data['assignmentCount'] = $actor->can('assignments.view') ? $record->assignments()->where('status','active')->count() : null;
+--- before/app/Http/Requests/RentalOverrideRequest.php
++++ after/app/Http/Requests/RentalOverrideRequest.php
+@@ -0,0 +1,59 @@
++<?php
++
++namespace App\Http\Requests;
++
++use Illuminate\Foundation\Http\FormRequest;
++use Illuminate\Support\Facades\Gate;
++
++class RentalOverrideRequest extends FormRequest
++{
++    public function authorize(): bool
++    {
++        Gate::authorize('view', $this->route('tenant'));
++        Gate::authorize('rentals.override.view');
++        $action = $this->route()->getActionMethod();
++        $decision = in_array($action, ['approve', 'reject', 'revoke'], true);
++        if ($decision) {
++            Gate::authorize('rentals.override.history');
++        }
++        Gate::authorize('rentals.override.'.($decision ? $action : 'request'));
++        $assignment = $this->route('assignment');
++        $override = $this->route('override');
++        abort_unless((int) $assignment->tenant_id === (int) $this->route('tenant')->id, 404);
++        abort_if($override && (int) $override->stall_assignment_id !== (int) $assignment->id, 404);
++
++        return true;
++    }
++
++    public function rules(): array
++    {
++        $action = $this->route()->getActionMethod();
++        $context = ['period'=>'nullable|date_format:Y-m'];
++        $reason = ['reason'=>'required|string|max:1000'];
++        $terms = [
++            'override_type'=>'required|in:rate_per_sqm,daily_amount',
++            'override_rate_per_sqm'=>'nullable',
++            'override_daily_amount'=>'nullable',
++        ] + array_fill_keys(['tenant_id', 'business_id', 'stall_id', 'stall_assignment_id'], 'sometimes|required|integer|min:1');
++        $rules = [
++            'preview'=>$terms,
++            'submit'=>['draft_fingerprint'=>'required|string|size:64'],
++            'approve'=>['fingerprint'=>'required|string|size:64'],
++            'reject'=>$reason,
++            'revoke'=>$reason + ['revocation_effective_from'=>'required|date_format:Y-m-d'],
++        ];
++        if (isset($rules[$action])) {
++            return $rules[$action] + ($action === 'preview' ? ['period'=>'required|date_format:Y-m'] : $context);
++        }
++        $draft = $terms + $reason + $context + [
++            'effective_from'=>'required|date_format:Y-m-d',
++            'effective_until'=>'nullable|date_format:Y-m-d|after_or_equal:effective_from',
++            'reference_document'=>'nullable|string|max:255',
++            'remarks'=>'nullable|string|max:2000',
++            'source_override_id'=>'nullable|integer|min:1',
++        ];
++        return $draft + ($action === 'store'
++            ? ['submission_key'=>'required|uuid', 'intent'=>'nullable|in:save,submit']
++            : ['submission_key'=>'sometimes|uuid', 'draft_fingerprint'=>'required|string|size:64']);
++    }
++}
+--- before/app/Models/StallAssignment.php
++++ after/app/Models/StallAssignment.php
+@@ -13,15 +13,19 @@
+         return $this->belongsTo(Tenant::class);
+     }
+     public function business()
+     {
+         return $this->belongsTo(Business::class);
+     }
+     public function agreement()
+     {
+         return $this->hasOne(RentalAgreement::class);
+     }
++    public function rentalOverrides()
++    {
++        return $this->hasMany(RentalOverride::class);
++    }
+     public function bills()
+     {
+         return $this->hasMany(RentalBill::class);
+     }
+ }
+--- before/app/Services/Reports.php
++++ after/app/Services/Reports.php
+@@ -1,13 +1,13 @@
+ <?php
+ namespace App\Services;
+-use App\Models\AuditLog;
++use App\Models\{AuditLog, RentalOverride};
+ use Illuminate\Support\Facades\DB;
+ class Reports
+ {
+     public const TYPES = [
+         "stall-master" => ["Stall Master List", "reports.view"],
+         "occupied-stalls" => ["Occupied Stall Report", "reports.view"],
+         "vacant-stalls" => ["Vacant Stall Report", "reports.view"],
+         "tenant-master" => ["Tenant Master List", "reports.personal"],
+         "assignment-history" => ["Stall Assignment History", "reports.personal"],
+         "monthly-billing" => ["Monthly Rental Billing", "reports.financial"],
+@@ -16,35 +16,49 @@
+         "collections-by-cashier" => ["Collections by Cashier", "reports.financial"],
+         "collections-by-location" => ["Collections by Market / Section", "reports.view"],
+         "receivables" => ["Outstanding Receivables", "reports.financial"],
+         "overdue" => ["Overdue Rental Accounts", "reports.financial"],
+         "tenant-statement" => ["Tenant Statement of Account", "reports.personal"],
+         "payment-history" => ["Payment Transaction History", "reports.financial"],
+         "rate-history" => ["Rental Rate History", "rates.view"],
+         "audit-trail" => ["Audit Trail Report", "audit.view"],
+         "business-categories" => ["Business Category Report", "rates.view"],
+         "rental-assessments" => ["Rental Assessment Report", "reports.financial"],
++        "rental-overrides" => ["Rental Override Report", "rentals.override.report"],
+         "lease-contract-registry" => ["Lease Contract Registry", "contracts.view"],
+     ];
+     public static function scopeFilters($type): array
+     {
+-        if ($type === 'business-categories') {
++        $filters = ['market_id'=>'Market','section_id'=>'Section','stall_id'=>'Stall','tenant_id'=>'Tenant','recorded_by'=>'Officer'];
++        if (in_array($type, ['business-categories', 'audit-trail'], true)) {
+             return [];
+         }
+-        $filters = ['market_id'=>'Market','section_id'=>'Section','stall_id'=>'Stall','tenant_id'=>'Tenant','recorded_by'=>'Officer'];
+-        if (in_array($type,['rental-assessments','lease-contract-registry'],true)) {
++        if ($type === 'rate-history') {
++            return ['market_id'=>$filters['market_id']];
++        }
++        if ($type === 'tenant-master') {
++            return array_intersect_key($filters, ['market_id'=>true, 'tenant_id'=>true]);
++        }
++        if (in_array($type, ['stall-master', 'occupied-stalls', 'vacant-stalls'], true)) {
++            unset($filters['tenant_id']);
++        }
++        if (!in_array($type, ['legacy', 'collection-summary', 'daily-collections', 'collections-by-cashier',
++            'collections-by-location', 'payment-history'], true)) {
+             unset($filters['recorded_by']);
+         }
+         return $filters;
+     }
+-    public static function query($type, array $f)
++    public static function query($type, array $f, bool $canSeeAssessmentMode = false)
+     {
++        if ($type === 'rental-overrides') {
++            return self::overrideQuery($f);
++        }
+         $date = null;
+         $marketColumn = null;
+         $sectionColumn = null;
+         $tenantColumn = null;
+         $stallColumn = null;
+         if (in_array($type, ["stall-master", "occupied-stalls", "vacant-stalls"])) {
+             $q = DB::table("stalls AS s")
+                 ->join("markets AS m", "m.id", "=", "s.market_id")
+                 ->join("market_sections AS sec", "sec.id", "=", "s.market_section_id")
+                 ->selectRaw(
+@@ -206,26 +220,41 @@
+                 ->leftJoin('business_category_rental_rates AS r',function ($join) {
+                     $join->on('r.business_category_id','=','c.id');
+                 })
+                 ->selectRaw('c.code,c.name,c.description,r.minimum_rate AS inner_minimum,r.maximum_rate AS outer_maximum,r.effective_from,r.effective_until,r.status AS rate_status,r.reference_document,c.is_active,(SELECT COUNT(*) FROM businesses b WHERE b.business_category_id=c.id) AS registered_business_count,(SELECT COUNT(*) FROM stall_assignments sa JOIN businesses b ON b.id=sa.business_id WHERE b.business_category_id=c.id AND sa.status=?) AS active_stall_count',['active'])
+                 ->orderBy('c.sort_order')->orderBy('c.name')->orderBy('r.effective_from');
+             if (!empty($f['business_category_id'])) {
+                 $q->where('c.id',$f['business_category_id']);
+             }
+             $date = 'r.effective_from';
+         } elseif ($type === 'rental-assessments') {
++            $sectionSnapshot = DB::connection()->getQueryGrammar()->wrap('ra.basis->stall_section_name');
+             $q = DB::table('rental_assessments AS ra')
+                 ->join('stall_assignments AS a','a.id','=','ra.stall_assignment_id')
+                 ->join('stalls AS s','s.id','=','a.stall_id')
+                 ->selectRaw('ra.id AS assessment,ra.period,ra.purpose,a.tenant_id,ra.market_name AS assessed_market,ra.stall_code AS assessed_stall,ra.business_category_name,ra.location_type,ra.floor_area,ra.minimum_rate,ra.maximum_rate,ra.rental_rate_sqm AS applied_rate,ra.daily_rental,ra.billing_days,ra.monthly_rental,ra.daily_cusa,ra.monthly_cusa,ra.total_monthly_rental_cusa,ra.business_category_rental_rate_id AS rate_schedule,ra.rental_policy_id AS policy,ra.created_at')
++                ->selectRaw("COALESCE(ra.market_section_name, {$sectionSnapshot}) AS assessed_section")
+                 ->orderByDesc('ra.id');
+-            $marketColumn = 'ra.market_id'; $sectionColumn = 's.market_section_id'; $tenantColumn = 'a.tenant_id'; $stallColumn = 'a.stall_id'; $date = 'ra.created_at';
++            if ($canSeeAssessmentMode) {
++                $q->addSelect('ra.computation_mode', 'ra.rental_difference')
++                    ->selectRaw('COALESCE(ra.automatic_daily_rental, ra.daily_rental) AS automatic_daily_rent');
++            }
++            $marketColumn = 'ra.market_id'; $tenantColumn = 'a.tenant_id'; $stallColumn = 'a.stall_id'; $date = 'ra.created_at';
++            if (!empty($f['section_id'])) {
++                $q->whereRaw('COALESCE(ra.market_section_id, s.market_section_id) = ?', [(int) $f['section_id']]);
++            }
++            if (!empty($f['computation_mode'])) {
++                $q->where('ra.computation_mode', $f['computation_mode']);
++            }
++            if (!empty($f['as_of'])) {
++                $q->where('ra.created_at', '<=', $f['as_of'].' 23:59:59');
++            }
+             if (!empty($f['business_category_id'])) { $q->where('ra.business_category_id',$f['business_category_id']); }
+             if (!empty($f['location_type'])) {
+                 $f['location_type']==='unclassified' ? $q->whereNull('ra.location_type') : $q->where('ra.location_type',$f['location_type']);
+             }
+         } elseif ($type === 'lease-contract-registry') {
+             $q = DB::table('lease_contracts AS c')
+                 ->join('stall_assignments AS a','a.id','=','c.stall_assignment_id')
+                 ->join('stalls AS s','s.id','=','a.stall_id')
+                 ->leftJoin('rental_assessments AS ra','ra.id','=','c.rental_assessment_id')
+                 ->selectRaw('c.control_number,c.tenant_id,COALESCE(ra.stall_code,s.code) AS stall,ra.business_category_name,ra.location_type,c.start_date,c.end_date,c.status,c.rental_rate_sqm,c.daily_rental,c.billing_days,c.monthly_rental,c.monthly_cusa,c.total_monthly_rental_cusa,c.generated_at,c.issued_at,c.visual_review_reference')
+@@ -276,16 +305,68 @@
+             }
+         }
+         if (
+             !empty($f["recorded_by"]) &&
+             (strpos($type, "collection") !== false || $type === "payment-history")
+         ) {
+             $q->where("p.recorded_by", $f["recorded_by"]);
+         }
+         return $q;
+     }
++
++    private static function overrideQuery(array $filters)
++    {
++        $day = $filters['as_of'] ?? today()->toDateString();
++        $covering = RentalOverride::covering($day, $day)
++            ->selectRaw('stall_assignment_id, MIN(id) AS id, COUNT(*) AS approval_count')
++            ->groupBy('stall_assignment_id');
++        $sectionSnapshot = DB::connection()->getQueryGrammar()->wrap('ra.basis->stall_section_name');
++        $authorityReference = DB::connection()->getQueryGrammar()->wrap('ro.authority_snapshot->override_authority_reference');
++        $term = '(a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?))';
++        $mode = "CASE WHEN {$term} AND covered.approval_count = 1 AND covered.id = ro.id THEN 'manual_override'
++            WHEN {$term} AND covered.id IS NULL THEN 'automatic' END";
++        $state = "CASE WHEN ro.status = 'revoked' AND ro.revocation_effective_from <= ? THEN 'revoked'
++            WHEN ro.status IN ('approved', 'revoked') AND (ro.effective_until < ? OR a.end_date < ?) THEN 'expired'
++            WHEN ro.status = 'revoked' THEN 'approved' ELSE ro.status END";
++        $source = DB::table('rental_overrides AS ro')
++            ->join('stall_assignments AS a', 'a.id', '=', 'ro.stall_assignment_id')
++            ->join('tenants AS t', 't.id', '=', 'a.tenant_id')
++            ->join('rental_assessments AS ra', 'ra.id', '=', 'ro.initial_assessment_id')
++            ->join('stalls AS s', 's.id', '=', 'a.stall_id')
++            ->leftJoin('businesses AS b', 'b.id', '=', 'a.business_id')
++            ->leftJoin('users AS reviewer', 'reviewer.id', '=', 'ro.approved_by')
++            ->leftJoinSub($covering->toBase(), 'covered', 'covered.stall_assignment_id', '=', 'a.id')
++            ->selectRaw("ro.id AS request, t.name AS tenant, b.name AS business, ra.stall_code AS stall,
++                COALESCE(ra.market_section_name, {$sectionSnapshot}) AS assessed_section,
++                ra.business_category_name AS business_category, ra.floor_area, ro.override_type AS method,
++                ro.automatic_daily_rental AS automatic_daily_rent, ro.proposed_daily_rental AS proposed_daily_rent,
++                ro.rental_difference AS proposed_daily_difference, ro.reason, ro.reference_document AS supporting_reference,
++                reviewer.name AS approved_by, ro.rental_policy_id AS authorizing_policy, {$authorityReference} AS exception_authority_reference,
++                ro.effective_from, ro.effective_until, ro.revocation_effective_from")
++            ->selectRaw("{$mode} AS computation_mode, {$state} AS status", [$day, $day, $day, $day, $day, $day, $day]);
++        foreach (['market_id'=>'ra.market_id', 'stall_id'=>'a.stall_id', 'tenant_id'=>'a.tenant_id', 'business_category_id'=>'ra.business_category_id'] as $filter=>$column) {
++            if (!empty($filters[$filter])) {
++                $source->where($column, $filters[$filter]);
++            }
++        }
++        if (!empty($filters['section_id'])) {
++            $source->whereRaw('COALESCE(ra.market_section_id, s.market_section_id) = ?', [(int) $filters['section_id']]);
++        }
++        $query = DB::query()->fromSub($source, 'requests')
++            ->select('requests.*')
++            ->selectRaw("CASE computation_mode WHEN 'manual_override' THEN proposed_daily_rent WHEN 'automatic' THEN automatic_daily_rent END AS applicable_daily_rent")
++            ->selectRaw("CASE computation_mode WHEN 'manual_override' THEN proposed_daily_difference WHEN 'automatic' THEN '0.00' END AS applicable_daily_difference")
++            ->orderByDesc('request');
++        foreach (['status', 'computation_mode'] as $filter) {
++            if (!empty($filters[$filter])) {
++                $query->where($filter, $filters[$filter]);
++            }
++        }
++        return $query;
++    }
++
+     public static function csvCell($value)
+     {
+         $value = (string) $value;
+         return preg_match("/^[\s]*[=+@\-]/u", $value) ? "'" . $value : $value;
+     }
+ }
+--- before/app/Support/AssignmentRental.php
++++ after/app/Support/AssignmentRental.php
+@@ -0,0 +1,48 @@
++<?php
++
++namespace App\Support;
++
++use App\Models\{RentalAssessment, StallAssignment};
++use App\Services\RentalCalculationService;
++use Carbon\Carbon;
++use Illuminate\Validation\ValidationException;
++
++class AssignmentRental
++{
++    public static function initial(StallAssignment $assignment): ?RentalAssessment
++    {
++        $assessment = optional($assignment->agreement)->assessment;
++        return $assessment && $assessment->purpose === 'initial' && (int) $assessment->stall_assignment_id === (int) $assignment->id
++            ? $assessment : null;
++    }
++
++    public static function quote(StallAssignment $assignment, string $period): array
++    {
++        if (!self::initial($assignment) || $period < substr($assignment->start_date, 0, 7) ||
++            ($assignment->end_date && $period > substr($assignment->end_date, 0, 7))) {
++            return [null, null];
++        }
++        try {
++            return [app(RentalCalculationService::class)->forAssignment($assignment, $period), null];
++        } catch (ValidationException $error) {
++            return [null, $error->validator->errors()->first()];
++        }
++    }
++
++    public static function earliestRequestMonth(StallAssignment $assignment): ?string
++    {
++        $initial = self::initial($assignment);
++        if (!$initial || $assignment->status !== 'active' || $assignment->tenant->status !== 'active' ||
++            !$assignment->business || $assignment->business->status !== 'active' ||
++            (int) $assignment->business_id !== (int) $initial->business_id ||
++            (int) $assignment->business->tenant_id !== (int) $assignment->tenant_id) {
++            return null;
++        }
++        $start = Carbon::parse(max($assignment->start_date, today()->toDateString()));
++        if ($start->day !== 1) {
++            $start->addMonthNoOverflow()->startOfMonth();
++        }
++        return $assignment->end_date && $start->copy()->endOfMonth()->toDateString() > $assignment->end_date
++            ? null : $start->toDateString();
++    }
++}
+--- before/app/Support/Navigation.php
++++ after/app/Support/Navigation.php
+@@ -32,30 +32,30 @@
+         }
+         return $groups;
+     }
+ 
+     private static function isCurrent(array $item, Request $request)
+     {
+         $route = $request->route();
+         if (!$route) {
+             return false;
+         }
+-        if ($item["route"] === "records.index" && ($item["params"]["type"] ?? null) === "tenants" && $request->routeIs('tenant-businesses.*','tenants.rental-preview')) {
++        if ($item["route"] === "records.index" && ($item["params"]["type"] ?? null) === "tenants" && $request->routeIs('tenant-businesses.*','tenants.rental-preview','rental-overrides.*')) {
+             return true;
+         }
+         if ($item["route"] === "payments.index" && $route->getName() === "payments.create") {
+             return false;
+         }
+         if ($item["route"] === "reports.index" && $route->getName() === "reports.show") {
+             return !in_array(
+                 $route->parameter("type"),
+-                ["occupied-stalls", "collection-summary", "tenant-master", "business-categories", "rental-assessments", "lease-contract-registry"],
++                ["occupied-stalls", "collection-summary", "tenant-master", "business-categories", "rental-assessments", "rental-overrides", "lease-contract-registry"],
+                 true,
+             );
+         }
+         foreach ($item["active"] as $pattern) {
+             if ($request->routeIs($pattern)) {
+                 foreach ($item["params"] as $key => $value) {
+                     if ((string) $route->parameter($key) !== (string) $value) {
+                         return false;
+                     }
+                 }
+--- before/config/navigation.php
++++ after/config/navigation.php
+@@ -125,20 +125,28 @@
+             ],
+             [
+                 "label" => "Rental Assessment Report",
+                 "route" => "reports.show",
+                 "permission" => "reports.financial",
+                 "params" => ["type" => "rental-assessments"],
+                 "icon" => "receipt",
+                 "active" => ["reports.show"],
+             ],
+             [
++                "label" => "Rental Override Report",
++                "route" => "reports.show",
++                "permission" => "rentals.override.report",
++                "params" => ["type" => "rental-overrides"],
++                "icon" => "receipt",
++                "active" => ["reports.show"],
++            ],
++            [
+                 "label" => "Lease Contract Registry",
+                 "route" => "reports.show",
+                 "permission" => "contracts.view",
+                 "params" => ["type" => "lease-contract-registry"],
+                 "icon" => "history",
+                 "active" => ["reports.show"],
+             ],
+             [
+                 "label" => "All Reports",
+                 "route" => "reports.index",
+--- before/public/assets/app.css
++++ after/public/assets/app.css
+@@ -1 +1 @@
+-*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}body{--tw-bg-opacity:1;background-color:rgb(243 246 251/var(--tw-bg-opacity,1));color:rgb(30 41 59/var(--tw-text-opacity,1));-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-family:Segoe UI,Arial,sans-serif}body,h1{--tw-text-opacity:1}h1{font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.025em;color:rgb(17 37 63/var(--tw-text-opacity,1))}@media (min-width:1024px){h1{font-size:1.875rem;line-height:2.25rem}}h2{font-size:1.125rem;line-height:1.75rem}h2,h3{font-weight:600;--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}label{margin-bottom:.25rem;margin-top:.75rem;display:block;font-size:.875rem;line-height:1.25rem;font-weight:500;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}input:not([type=checkbox]),select,textarea{width:100%;border-radius:.5rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(203 213 225/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(15 23 42/var(--tw-text-opacity,1))}input[type=checkbox]{height:1rem;width:1rem;accent-color:#1d67d7}input,textarea{caret-color:#1d67d7}input::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}input::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}a{text-underline-offset:4px}::-moz-selection{background:#cfe1fb;color:#11253f}::selection{background:#cfe1fb;color:#11253f}td,th{font-variant-numeric:tabular-nums}.container{width:100%}@media (min-width:640px){.container{max-width:640px}}@media (min-width:768px){.container{max-width:768px}}@media (min-width:1024px){.container{max-width:1024px}}@media (min-width:1280px){.container{max-width:1280px}}@media (min-width:1536px){.container{max-width:1536px}}.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.5rem;--tw-bg-opacity:1;background-color:rgb(29 103 215/var(--tw-bg-opacity,1));padding:.625rem 1rem;font-size:.875rem;line-height:1.25rem;font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.btn:hover{--tw-bg-opacity:1;background-color:rgb(30 64 175/var(--tw-bg-opacity,1))}.btn:disabled{cursor:wait;opacity:.5}.btn{min-height:44px}.btn.secondary{--tw-bg-opacity:1;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.btn.secondary:hover{--tw-bg-opacity:1;background-color:rgb(219 234 254/var(--tw-bg-opacity,1))}.btn.danger{--tw-bg-opacity:1;background-color:rgb(254 242 242/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.btn.danger:hover{--tw-bg-opacity:1;background-color:rgb(254 226 226/var(--tw-bg-opacity,1))}.panel{border-radius:.75rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:1.25rem}@media (min-width:1024px){.panel{padding:1.5rem}}.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem}.toolbar label{margin-top:0}.toolbar>div{min-width:140px}.tablewrap{overflow-x:auto}.tablewrap table{width:100%;text-align:left;font-size:.875rem;line-height:1.25rem}.tablewrap th{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1));padding:.75rem;font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.025em;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.tablewrap td{border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding:.875rem .75rem;vertical-align:top}.tablewrap tbody tr:hover{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1))}.notice{margin-bottom:1.25rem;border-radius:.5rem;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));padding:.75rem 1rem;font-size:.875rem;line-height:1.25rem;color:rgb(30 58 138/var(--tw-text-opacity,1))}.notice,.notice.error{--tw-bg-opacity:1;--tw-text-opacity:1}.notice.error{background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.notice.success{--tw-bg-opacity:1;background-color:rgb(236 253 245/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(6 95 70/var(--tw-text-opacity,1))}.\!empty,.empty{padding:2rem;text-align:center;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.badge{display:inline-block;border-radius:9999px;--tw-bg-opacity:1;background-color:rgb(241 245 249/var(--tw-bg-opacity,1));padding:.25rem .625rem;font-size:.75rem;line-height:1rem;font-weight:600;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-occupied{border-color:rgb(167 243 208/var(--tw-border-opacity,1));background-color:rgb(236 253 245/var(--tw-bg-opacity,1));color:rgb(6 95 70/var(--tw-text-opacity,1))}.status-occupied,.status-vacant{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-vacant{border-color:rgb(203 213 225/var(--tw-border-opacity,1));background-color:rgb(241 245 249/var(--tw-bg-opacity,1));color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-reserved{border-color:rgb(252 211 77/var(--tw-border-opacity,1));background-color:rgb(255 251 235/var(--tw-bg-opacity,1));color:rgb(120 53 15/var(--tw-text-opacity,1))}.status-maintenance,.status-reserved{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-maintenance{border-color:rgb(254 202 202/var(--tw-border-opacity,1));background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.status-inactive{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink{display:block;border-radius:.5rem;padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(219 234 254/var(--tw-text-opacity,1))}.navlink.active,.navlink:hover{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink.active{font-weight:600}.navlink.\!active{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.detailrow{display:flex;justify-content:space-between;gap:1.25rem;border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding-top:.75rem;padding-bottom:.75rem;font-size:.875rem;line-height:1.25rem}.detailrow dt{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.detailrow dd{overflow-wrap:break-word;text-align:right;font-weight:500}.stall{min-height:76px;border-radius:.5rem;border-width:1px;padding:.75rem;text-align:center}.stall:hover,.stall[aria-pressed=true]{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000);--tw-ring-opacity:1;--tw-ring-color:rgb(29 103 215/var(--tw-ring-opacity,1))}.stall[aria-pressed=true]{--tw-ring-offset-width:2px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}.visible{visibility:visible}.fixed{position:fixed}.col-span-full{grid-column:1/-1}.mx-auto{margin-left:auto;margin-right:auto}.my-3{margin-top:.75rem;margin-bottom:.75rem}.my-4{margin-top:1rem;margin-bottom:1rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}.ml-2{margin-left:.5rem}.mr-2{margin-right:.5rem}.mr-3{margin-right:.75rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-5{margin-top:1.25rem}.mt-6{margin-top:1.5rem}.mt-8{margin-top:2rem}.block{display:block}.inline-block{display:inline-block}.flex{display:flex}.inline-flex{display:inline-flex}.table{display:table}.grid{display:grid}.contents{display:contents}.hidden{display:none}.h-3{height:.75rem}.h-64{height:16rem}.min-h-11{min-height:2.75rem}.min-h-screen{min-height:100vh}.w-3{width:.75rem}.w-full{width:100%}.min-w-0{min-width:0}.min-w-48{min-width:12rem}.max-w-2xl{max-width:42rem}.max-w-3xl{max-width:48rem}.max-w-4xl{max-width:56rem}.max-w-5xl{max-width:64rem}.max-w-\[1600px\]{max-width:1600px}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}.cursor-pointer{cursor:pointer}.scroll-mt-4{scroll-margin-top:1rem}.list-disc{list-style-type:disc}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-wrap{flex-wrap:wrap}.items-start{align-items:flex-start}.items-end{align-items:flex-end}.items-center{align-items:center}.items-baseline{align-items:baseline}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:1.25rem}.gap-6{gap:1.5rem}.gap-x-4{-moz-column-gap:1rem;column-gap:1rem}.gap-x-6{-moz-column-gap:1.5rem;column-gap:1.5rem}.gap-y-1{row-gap:.25rem}.gap-y-2{row-gap:.5rem}.gap-y-3{row-gap:.75rem}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.space-y-5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1.25rem*var(--tw-space-y-reverse))}.divide-y>:not([hidden])~:not([hidden]){--tw-divide-y-reverse:0;border-top-width:calc(1px*(1 - var(--tw-divide-y-reverse)));border-bottom-width:calc(1px*var(--tw-divide-y-reverse))}.divide-slate-100>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(241 245 249/var(--tw-divide-opacity,1))}.divide-slate-200>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(226 232 240/var(--tw-divide-opacity,1))}.overflow-x-auto{overflow-x:auto}.whitespace-nowrap{white-space:nowrap}.whitespace-pre-line{white-space:pre-line}.break-words{overflow-wrap:break-word}.break-all{word-break:break-all}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}.border{border-width:1px}.border-b{border-bottom-width:1px}.border-b-2{border-bottom-width:2px}.border-t{border-top-width:1px}.border-blue-700{--tw-border-opacity:1;border-color:rgb(29 78 216/var(--tw-border-opacity,1))}.border-slate-200{--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1))}.border-slate-400{--tw-border-opacity:1;border-color:rgb(148 163 184/var(--tw-border-opacity,1))}.border-transparent{border-color:transparent}.bg-navy{--tw-bg-opacity:1;background-color:rgb(17 37 63/var(--tw-bg-opacity,1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1))}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.p-8{padding:2rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}.pb-3{padding-bottom:.75rem}.pb-4{padding-bottom:1rem}.pl-5{padding-left:1.25rem}.pt-3{padding-top:.75rem}.pt-4{padding-top:1rem}.text-right{text-align:right}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-normal{font-weight:400}.font-semibold{font-weight:600}.tabular-nums{--tw-numeric-spacing:tabular-nums;font-variant-numeric:var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction)}.text-blue-800{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.text-blue-900{--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.text-navy{--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}.text-red-800{--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}.text-slate-600{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.text-slate-700{--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.underline{text-decoration-line:underline}.underline-offset-2{text-underline-offset:2px}.filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}@media print{.no-print,aside,header{display:none!important}main{margin:0!important;padding:0!important}.panel{border:0}}@media(prefers-reduced-motion:no-preference){.stall{transition:box-shadow .15s ease-out}.details-loaded{animation:detail-enter .18s ease-out}@keyframes detail-enter{0%{transform:translateX(6px)}to{transform:translateX(0)}}}.sidebar-shell{position:fixed;inset:0 auto 0 0;z-index:40;display:flex;flex-direction:column;width:min(19rem,calc(100vw - 3rem));background:#11253f;color:#fff;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 12px 30px rgba(17,37,63,.2)}.sidebar-open .sidebar-shell{transform:translateX(0)}.sidebar-overlay:not([hidden]){position:fixed;inset:0;z-index:30;background:rgba(15,23,42,.62)}.sidebar-brand{display:flex;align-items:center;gap:.5rem;flex:none;padding:1rem 1.1rem;border-bottom:1px solid #35506e;min-height:76px}.sidebar-brand-link{display:flex;align-items:center;gap:.75rem;min-width:0;color:#fff;text-decoration:none}.sidebar-mark{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;border-radius:.7rem;background:#1d67d7;font-size:.8rem;font-weight:800;letter-spacing:.03em}.sidebar-brand-text{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}.sidebar-brand-text strong{font-size:1.15rem}.sidebar-brand-text small{color:#c5d9f6;font-size:.72rem;margin-top:.2rem}.sidebar-close{margin-left:auto;min-width:44px;min-height:44px;border-radius:.5rem;font-size:1.6rem;color:#dbeafe}.sidebar-close:hover{background:#24466c}.sidebar-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:.75rem .7rem}.nav-group{border-bottom:1px solid #35506e;padding:.3rem 0}.nav-group:last-child{border:0}.nav-group-heading{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.5rem .65rem;border-radius:.55rem;color:#bcd4f4;cursor:pointer;font-size:.72rem;font-weight:700;letter-spacing:.075em;text-transform:uppercase;list-style:none}.nav-group-heading::-webkit-details-marker{display:none}.nav-group-heading:focus-visible,.nav-group-heading:hover{background:#24466c;color:#fff}.nav-group-label{flex:1;white-space:nowrap}.nav-chevron{font-size:1.2rem;line-height:1;transition:transform .2s}.nav-group[open] .nav-chevron{transform:rotate(180deg)}.nav-group-items{overflow:hidden}.nav-icon{width:1.2rem;height:1.2rem;flex:none}.navlink{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:.1rem 0;padding:.6rem .65rem .6rem 1rem;border-radius:.55rem;color:#dbeafe;text-decoration:none;font-size:.84rem;line-height:1.2}.navlink:hover{background:#24466c;color:#fff}.navlink.active{background:#2b5888;color:#fff;font-weight:700;box-shadow:inset 3px 0 #82b5ff}.nav-item-label{white-space:nowrap}.sidebar-account{flex:none;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:1rem 1.1rem;border-top:1px solid #35506e;background:#102138}.sidebar-avatar{display:grid;place-items:center;flex:none;width:2.3rem;height:2.3rem;border-radius:50%;background:#355b86;font-weight:700}.sidebar-account-text{min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.3}.sidebar-account-text small,.sidebar-account-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-account-text strong{font-size:.82rem}.sidebar-account-text small{color:#c5d9f6;font-size:.7rem}.sidebar-logout{width:100%}.sidebar-logout button{display:flex;align-items:center;gap:.75rem;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:.55rem;color:#dbeafe;font-size:.84rem}.sidebar-logout button:hover{background:#24466c;color:#fff}.sidebar-open{overflow:hidden}@media(min-width:1024px){.sidebar-shell{position:sticky;top:0;z:auto;width:16rem;height:100vh;flex:none;transform:none;box-shadow:none;transition:width .2s ease}.sidebar-overlay{display:none!important}.sidebar-close{display:none}.sidebar-compact .sidebar-shell{width:4.75rem}.sidebar-compact .sidebar-brand{justify-content:center;padding:.8rem}.sidebar-compact .nav-chevron,.sidebar-compact .nav-group-heading,.sidebar-compact .nav-group-label,.sidebar-compact .nav-item-label,.sidebar-compact .sidebar-account-text,.sidebar-compact .sidebar-brand-text{display:none}.sidebar-compact .sidebar-nav{padding:.7rem .45rem}.sidebar-compact .nav-group{padding:.2rem 0}.sidebar-compact .navlink{justify-content:center;padding:.7rem}.sidebar-compact .sidebar-account{justify-content:center;padding:.7rem .4rem}.sidebar-compact .sidebar-logout button{justify-content:center;padding:.55rem}}@media(max-width:1023px){.sidebar-shell{visibility:hidden}.sidebar-open .sidebar-shell{visibility:visible}}@media(prefers-reduced-motion:reduce){.nav-chevron,.sidebar-shell{transition:none!important}}.hover\:text-blue-800:hover{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.hover\:underline:hover{text-decoration-line:underline}.focus\:not-sr-only:focus{position:static;width:auto;height:auto;padding:0;margin:0;overflow:visible;clip:auto;white-space:normal}@media (min-width:640px){.sm\:col-span-2{grid-column:span 2/span 2}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){.md\:col-span-2{grid-column:span 2/span 2}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.md\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:1024px){.lg\:flex{display:flex}.lg\:inline-flex{display:inline-flex}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:p-8{padding:2rem}.lg\:px-8{padding-left:2rem;padding-right:2rem}}@media (min-width:1280px){.xl\:sticky{position:sticky}.xl\:top-5{top:1.25rem}.xl\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}.xl\:grid-cols-\[minmax\(0\2c 1\.7fr\)_minmax\(300px\2c 1fr\)\]{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr)}}+*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}body{--tw-bg-opacity:1;background-color:rgb(243 246 251/var(--tw-bg-opacity,1));color:rgb(30 41 59/var(--tw-text-opacity,1));-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-family:Segoe UI,Arial,sans-serif}body,h1{--tw-text-opacity:1}h1{font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.025em;color:rgb(17 37 63/var(--tw-text-opacity,1))}@media (min-width:1024px){h1{font-size:1.875rem;line-height:2.25rem}}h2{font-size:1.125rem;line-height:1.75rem}h2,h3{font-weight:600;--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}label{margin-bottom:.25rem;margin-top:.75rem;display:block;font-size:.875rem;line-height:1.25rem;font-weight:500;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}input:not([type=checkbox]),select,textarea{width:100%;border-radius:.5rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(203 213 225/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(15 23 42/var(--tw-text-opacity,1))}input[type=checkbox]{height:1rem;width:1rem;accent-color:#1d67d7}input,textarea{caret-color:#1d67d7}input::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}input::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}a{text-underline-offset:4px}::-moz-selection{background:#cfe1fb;color:#11253f}::selection{background:#cfe1fb;color:#11253f}td,th{font-variant-numeric:tabular-nums}.container{width:100%}@media (min-width:640px){.container{max-width:640px}}@media (min-width:768px){.container{max-width:768px}}@media (min-width:1024px){.container{max-width:1024px}}@media (min-width:1280px){.container{max-width:1280px}}@media (min-width:1536px){.container{max-width:1536px}}.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.5rem;--tw-bg-opacity:1;background-color:rgb(29 103 215/var(--tw-bg-opacity,1));padding:.625rem 1rem;font-size:.875rem;line-height:1.25rem;font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.btn:hover{--tw-bg-opacity:1;background-color:rgb(30 64 175/var(--tw-bg-opacity,1))}.btn:disabled{cursor:wait;opacity:.5}.btn{min-height:44px}.btn.secondary{--tw-bg-opacity:1;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.btn.secondary:hover{--tw-bg-opacity:1;background-color:rgb(219 234 254/var(--tw-bg-opacity,1))}.btn.danger{--tw-bg-opacity:1;background-color:rgb(254 242 242/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.btn.danger:hover{--tw-bg-opacity:1;background-color:rgb(254 226 226/var(--tw-bg-opacity,1))}.panel{border-radius:.75rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:1.25rem}@media (min-width:1024px){.panel{padding:1.5rem}}.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem}.toolbar label{margin-top:0}.toolbar>div{min-width:140px}.tablewrap{overflow-x:auto}.tablewrap table{width:100%;text-align:left;font-size:.875rem;line-height:1.25rem}.tablewrap th{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1));padding:.75rem;font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.025em;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.tablewrap td{border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding:.875rem .75rem;vertical-align:top}.tablewrap tbody tr:hover{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1))}.notice{margin-bottom:1.25rem;border-radius:.5rem;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));padding:.75rem 1rem;font-size:.875rem;line-height:1.25rem;color:rgb(30 58 138/var(--tw-text-opacity,1))}.notice,.notice.error{--tw-bg-opacity:1;--tw-text-opacity:1}.notice.error{background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.notice.success{--tw-bg-opacity:1;background-color:rgb(236 253 245/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(6 95 70/var(--tw-text-opacity,1))}.\!empty,.empty{padding:2rem;text-align:center;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.badge{display:inline-block;border-radius:9999px;--tw-bg-opacity:1;background-color:rgb(241 245 249/var(--tw-bg-opacity,1));padding:.25rem .625rem;font-size:.75rem;line-height:1rem;font-weight:600;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-occupied{border-color:rgb(167 243 208/var(--tw-border-opacity,1));background-color:rgb(236 253 245/var(--tw-bg-opacity,1));color:rgb(6 95 70/var(--tw-text-opacity,1))}.status-occupied,.status-vacant{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-vacant{border-color:rgb(203 213 225/var(--tw-border-opacity,1));background-color:rgb(241 245 249/var(--tw-bg-opacity,1));color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-reserved{border-color:rgb(252 211 77/var(--tw-border-opacity,1));background-color:rgb(255 251 235/var(--tw-bg-opacity,1));color:rgb(120 53 15/var(--tw-text-opacity,1))}.status-maintenance,.status-reserved{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-maintenance{border-color:rgb(254 202 202/var(--tw-border-opacity,1));background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.status-inactive{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink{display:block;border-radius:.5rem;padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(219 234 254/var(--tw-text-opacity,1))}.navlink.active,.navlink:hover{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink.active{font-weight:600}.navlink.\!active{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.detailrow{display:flex;justify-content:space-between;gap:1.25rem;border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding-top:.75rem;padding-bottom:.75rem;font-size:.875rem;line-height:1.25rem}.detailrow dt{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.detailrow dd{overflow-wrap:break-word;text-align:right;font-weight:500}.stall{min-height:76px;border-radius:.5rem;border-width:1px;padding:.75rem;text-align:center}.stall:hover,.stall[aria-pressed=true]{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000);--tw-ring-opacity:1;--tw-ring-color:rgb(29 103 215/var(--tw-ring-opacity,1))}.stall[aria-pressed=true]{--tw-ring-offset-width:2px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}.visible{visibility:visible}.static{position:static}.fixed{position:fixed}.col-span-full{grid-column:1/-1}.mx-auto{margin-left:auto;margin-right:auto}.my-3{margin-top:.75rem;margin-bottom:.75rem}.my-4{margin-top:1rem;margin-bottom:1rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}.ml-2{margin-left:.5rem}.mr-2{margin-right:.5rem}.mr-3{margin-right:.75rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-5{margin-top:1.25rem}.mt-6{margin-top:1.5rem}.mt-8{margin-top:2rem}.block{display:block}.inline-block{display:inline-block}.flex{display:flex}.inline-flex{display:inline-flex}.table{display:table}.grid{display:grid}.contents{display:contents}.hidden{display:none}.h-3{height:.75rem}.h-64{height:16rem}.min-h-11{min-height:2.75rem}.min-h-screen{min-height:100vh}.w-3{width:.75rem}.w-full{width:100%}.min-w-0{min-width:0}.min-w-48{min-width:12rem}.max-w-2xl{max-width:42rem}.max-w-3xl{max-width:48rem}.max-w-4xl{max-width:56rem}.max-w-5xl{max-width:64rem}.max-w-\[1600px\]{max-width:1600px}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.max-w-xl{max-width:36rem}.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}.cursor-pointer{cursor:pointer}.scroll-mt-4{scroll-margin-top:1rem}.list-disc{list-style-type:disc}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-wrap{flex-wrap:wrap}.items-start{align-items:flex-start}.items-end{align-items:flex-end}.items-center{align-items:center}.items-baseline{align-items:baseline}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:1.25rem}.gap-6{gap:1.5rem}.gap-x-4{-moz-column-gap:1rem;column-gap:1rem}.gap-x-6{-moz-column-gap:1.5rem;column-gap:1.5rem}.gap-y-1{row-gap:.25rem}.gap-y-2{row-gap:.5rem}.gap-y-3{row-gap:.75rem}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.space-y-5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1.25rem*var(--tw-space-y-reverse))}.divide-y>:not([hidden])~:not([hidden]){--tw-divide-y-reverse:0;border-top-width:calc(1px*(1 - var(--tw-divide-y-reverse)));border-bottom-width:calc(1px*var(--tw-divide-y-reverse))}.divide-slate-100>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(241 245 249/var(--tw-divide-opacity,1))}.divide-slate-200>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(226 232 240/var(--tw-divide-opacity,1))}.overflow-x-auto{overflow-x:auto}.whitespace-nowrap{white-space:nowrap}.whitespace-pre-line{white-space:pre-line}.whitespace-pre-wrap{white-space:pre-wrap}.break-words{overflow-wrap:break-word}.break-all{word-break:break-all}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}.border{border-width:1px}.border-b{border-bottom-width:1px}.border-b-2{border-bottom-width:2px}.border-t{border-top-width:1px}.border-blue-700{--tw-border-opacity:1;border-color:rgb(29 78 216/var(--tw-border-opacity,1))}.border-slate-200{--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1))}.border-slate-400{--tw-border-opacity:1;border-color:rgb(148 163 184/var(--tw-border-opacity,1))}.border-transparent{border-color:transparent}.bg-navy{--tw-bg-opacity:1;background-color:rgb(17 37 63/var(--tw-bg-opacity,1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1))}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.p-8{padding:2rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}.pb-3{padding-bottom:.75rem}.pb-4{padding-bottom:1rem}.pl-5{padding-left:1.25rem}.pt-3{padding-top:.75rem}.pt-4{padding-top:1rem}.pt-5{padding-top:1.25rem}.text-right{text-align:right}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-normal{font-weight:400}.font-semibold{font-weight:600}.tabular-nums{--tw-numeric-spacing:tabular-nums;font-variant-numeric:var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction)}.text-amber-900{--tw-text-opacity:1;color:rgb(120 53 15/var(--tw-text-opacity,1))}.text-blue-800{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.text-blue-900{--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.text-navy{--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}.text-red-800{--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}.text-slate-600{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.text-slate-700{--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.underline{text-decoration-line:underline}.underline-offset-2{text-underline-offset:2px}.filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}@media print{.no-print,aside,header{display:none!important}main{margin:0!important;padding:0!important}.panel{border:0}}@media(prefers-reduced-motion:no-preference){.stall{transition:box-shadow .15s ease-out}.details-loaded{animation:detail-enter .18s ease-out}@keyframes detail-enter{0%{transform:translateX(6px)}to{transform:translateX(0)}}}.sidebar-shell{position:fixed;inset:0 auto 0 0;z-index:40;display:flex;flex-direction:column;width:min(19rem,calc(100vw - 3rem));background:#11253f;color:#fff;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 12px 30px rgba(17,37,63,.2)}.sidebar-open .sidebar-shell{transform:translateX(0)}.sidebar-overlay:not([hidden]){position:fixed;inset:0;z-index:30;background:rgba(15,23,42,.62)}.sidebar-brand{display:flex;align-items:center;gap:.5rem;flex:none;padding:1rem 1.1rem;border-bottom:1px solid #35506e;min-height:76px}.sidebar-brand-link{display:flex;align-items:center;gap:.75rem;min-width:0;color:#fff;text-decoration:none}.sidebar-mark{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;border-radius:.7rem;background:#1d67d7;font-size:.8rem;font-weight:800;letter-spacing:.03em}.sidebar-brand-text{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}.sidebar-brand-text strong{font-size:1.15rem}.sidebar-brand-text small{color:#c5d9f6;font-size:.72rem;margin-top:.2rem}.sidebar-close{margin-left:auto;min-width:44px;min-height:44px;border-radius:.5rem;font-size:1.6rem;color:#dbeafe}.sidebar-close:hover{background:#24466c}.sidebar-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:.75rem .7rem}.nav-group{border-bottom:1px solid #35506e;padding:.3rem 0}.nav-group:last-child{border:0}.nav-group-heading{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.5rem .65rem;border-radius:.55rem;color:#bcd4f4;cursor:pointer;font-size:.72rem;font-weight:700;letter-spacing:.075em;text-transform:uppercase;list-style:none}.nav-group-heading::-webkit-details-marker{display:none}.nav-group-heading:focus-visible,.nav-group-heading:hover{background:#24466c;color:#fff}.nav-group-label{flex:1;white-space:nowrap}.nav-chevron{font-size:1.2rem;line-height:1;transition:transform .2s}.nav-group[open] .nav-chevron{transform:rotate(180deg)}.nav-group-items{overflow:hidden}.nav-icon{width:1.2rem;height:1.2rem;flex:none}.navlink{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:.1rem 0;padding:.6rem .65rem .6rem 1rem;border-radius:.55rem;color:#dbeafe;text-decoration:none;font-size:.84rem;line-height:1.2}.navlink:hover{background:#24466c;color:#fff}.navlink.active{background:#2b5888;color:#fff;font-weight:700;box-shadow:inset 3px 0 #82b5ff}.nav-item-label{white-space:nowrap}.sidebar-account{flex:none;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:1rem 1.1rem;border-top:1px solid #35506e;background:#102138}.sidebar-avatar{display:grid;place-items:center;flex:none;width:2.3rem;height:2.3rem;border-radius:50%;background:#355b86;font-weight:700}.sidebar-account-text{min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.3}.sidebar-account-text small,.sidebar-account-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-account-text strong{font-size:.82rem}.sidebar-account-text small{color:#c5d9f6;font-size:.7rem}.sidebar-logout{width:100%}.sidebar-logout button{display:flex;align-items:center;gap:.75rem;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:.55rem;color:#dbeafe;font-size:.84rem}.sidebar-logout button:hover{background:#24466c;color:#fff}.sidebar-open{overflow:hidden}@media(min-width:1024px){.sidebar-shell{position:sticky;top:0;z:auto;width:16rem;height:100vh;flex:none;transform:none;box-shadow:none;transition:width .2s ease}.sidebar-overlay{display:none!important}.sidebar-close{display:none}.sidebar-compact .sidebar-shell{width:4.75rem}.sidebar-compact .sidebar-brand{justify-content:center;padding:.8rem}.sidebar-compact .nav-chevron,.sidebar-compact .nav-group-heading,.sidebar-compact .nav-group-label,.sidebar-compact .nav-item-label,.sidebar-compact .sidebar-account-text,.sidebar-compact .sidebar-brand-text{display:none}.sidebar-compact .sidebar-nav{padding:.7rem .45rem}.sidebar-compact .nav-group{padding:.2rem 0}.sidebar-compact .navlink{justify-content:center;padding:.7rem}.sidebar-compact .sidebar-account{justify-content:center;padding:.7rem .4rem}.sidebar-compact .sidebar-logout button{justify-content:center;padding:.55rem}}@media(max-width:1023px){.sidebar-shell{visibility:hidden}.sidebar-open .sidebar-shell{visibility:visible}}@media(prefers-reduced-motion:reduce){.nav-chevron,.sidebar-shell{transition:none!important}}.hover\:text-blue-800:hover{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.hover\:underline:hover{text-decoration-line:underline}.focus\:not-sr-only:focus{position:static;width:auto;height:auto;padding:0;margin:0;overflow:visible;clip:auto;white-space:normal}@media (min-width:640px){.sm\:col-span-2{grid-column:span 2/span 2}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){.md\:col-span-2{grid-column:span 2/span 2}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.md\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:1024px){.lg\:flex{display:flex}.lg\:inline-flex{display:inline-flex}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:p-8{padding:2rem}.lg\:px-8{padding-left:2rem;padding-right:2rem}}@media (min-width:1280px){.xl\:sticky{position:sticky}.xl\:top-5{top:1.25rem}.xl\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}.xl\:grid-cols-\[minmax\(0\2c 1\.7fr\)_minmax\(300px\2c 1fr\)\]{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr)}}--- before/public/assets/rental-overrides.js
++++ after/public/assets/rental-overrides.js
+@@ -0,0 +1,94 @@
++document.querySelectorAll("[data-rental-override]").forEach((form) => {
++    const method = form.elements.override_type;
++    const start = form.elements.effective_from;
++    const preview = form.querySelector("[data-override-preview]");
++    const result = form.querySelector("[data-override-result]");
++    const submitSaved = form.parentElement.querySelector("[data-submit-saved-draft]");
++    let pending;
++
++    function updateFields() {
++        pending?.abort();
++        for (const group of form.querySelectorAll("[data-override-amount]")) {
++            const selected = group.dataset.overrideAmount === method.value;
++            const input = group.querySelector("input");
++            group.hidden = !selected;
++            input.disabled = !selected;
++            input.required = selected;
++        }
++        preview.disabled = false;
++        result.replaceChildren();
++    }
++
++    function line(message, style = "mt-2") {
++        const paragraph = document.createElement("p");
++        paragraph.className = style;
++        paragraph.textContent = message;
++        result.append(paragraph);
++    }
++
++    method.addEventListener("change", updateFields);
++    form.querySelectorAll("[data-override-amount] input").forEach((input) => {
++        input.addEventListener("input", updateFields);
++    });
++    start.addEventListener("input", updateFields);
++    updateFields();
++    preview.hidden = false;
++    if (submitSaved) {
++        form.addEventListener("input", () => { submitSaved.disabled = true; });
++        form.addEventListener("change", () => { submitSaved.disabled = true; });
++    }
++    preview.addEventListener("click", async () => {
++        const field = method.value === "daily_amount" ? "override_daily_amount" : "override_rate_per_sqm";
++        const amount = form.elements[field];
++        if (!amount.reportValidity() || !start.reportValidity()) return;
++        if (!start.value.endsWith("-01")) {
++            result.replaceChildren();
++            line("Choose the first day of a month before previewing.", "mt-2 text-red-800");
++            start.focus();
++            return;
++        }
++
++        pending?.abort();
++        const active = new AbortController();
++        pending = active;
++        result.replaceChildren();
++        line("Calculating proposed rent…");
++        preview.disabled = true;
++        const period = start.value.slice(0, 7);
++        try {
++            const response = await fetch(form.dataset.previewUrl, {
++                method: "POST",
++                headers: {
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "X-CSRF-TOKEN": form.elements._token.value,
++                },
++                body: JSON.stringify({period, override_type: method.value, [field]: amount.value}),
++                signal: active.signal,
++            });
++            const data = await response.json();
++            if (active.signal.aborted) return;
++            result.replaceChildren();
++            if (!response.ok) {
++                line(data.errors ? Object.values(data.errors).flat().join(" ") : "Preview unavailable. Reload the page or try again.", "mt-2 text-red-800");
++                return;
++            }
++
++            line(`Proposed rent for ${period} · Approval required`, "mt-3 font-semibold");
++            line(`Automatic PHP ${data.automatic_daily_rental} daily · Proposed PHP ${data.daily_rental} daily · Difference PHP ${data.rental_difference} daily`);
++            line(`Proposed monthly total with CUSA: PHP ${data.total_monthly_rental_cusa} for ${data.billing_days} days.`);
++            if (data.zero_rent || data.out_of_range) {
++                line("This proposal needs explicit exception authority and supporting references. CUSA remains payable.", "mt-2 text-amber-900");
++            }
++            if (!data.contract_rate_consistent) {
++                line("The two-decimal equivalent rate cannot reproduce this daily amount in the lease template.", "mt-2 text-amber-900");
++            }
++        } catch (error) {
++            if (active.signal.aborted) return;
++            result.replaceChildren();
++            line("Preview unavailable. Reload the page or try again.", "mt-2 text-red-800");
++        } finally {
++            if (pending === active && !active.signal.aborted) preview.disabled = false;
++        }
++    });
++});
+--- before/resources/js/rental-overrides.js
++++ after/resources/js/rental-overrides.js
+@@ -0,0 +1,94 @@
++document.querySelectorAll("[data-rental-override]").forEach((form) => {
++    const method = form.elements.override_type;
++    const start = form.elements.effective_from;
++    const preview = form.querySelector("[data-override-preview]");
++    const result = form.querySelector("[data-override-result]");
++    const submitSaved = form.parentElement.querySelector("[data-submit-saved-draft]");
++    let pending;
++
++    function updateFields() {
++        pending?.abort();
++        for (const group of form.querySelectorAll("[data-override-amount]")) {
++            const selected = group.dataset.overrideAmount === method.value;
++            const input = group.querySelector("input");
++            group.hidden = !selected;
++            input.disabled = !selected;
++            input.required = selected;
++        }
++        preview.disabled = false;
++        result.replaceChildren();
++    }
++
++    function line(message, style = "mt-2") {
++        const paragraph = document.createElement("p");
++        paragraph.className = style;
++        paragraph.textContent = message;
++        result.append(paragraph);
++    }
++
++    method.addEventListener("change", updateFields);
++    form.querySelectorAll("[data-override-amount] input").forEach((input) => {
++        input.addEventListener("input", updateFields);
++    });
++    start.addEventListener("input", updateFields);
++    updateFields();
++    preview.hidden = false;
++    if (submitSaved) {
++        form.addEventListener("input", () => { submitSaved.disabled = true; });
++        form.addEventListener("change", () => { submitSaved.disabled = true; });
++    }
++    preview.addEventListener("click", async () => {
++        const field = method.value === "daily_amount" ? "override_daily_amount" : "override_rate_per_sqm";
++        const amount = form.elements[field];
++        if (!amount.reportValidity() || !start.reportValidity()) return;
++        if (!start.value.endsWith("-01")) {
++            result.replaceChildren();
++            line("Choose the first day of a month before previewing.", "mt-2 text-red-800");
++            start.focus();
++            return;
++        }
++
++        pending?.abort();
++        const active = new AbortController();
++        pending = active;
++        result.replaceChildren();
++        line("Calculating proposed rent…");
++        preview.disabled = true;
++        const period = start.value.slice(0, 7);
++        try {
++            const response = await fetch(form.dataset.previewUrl, {
++                method: "POST",
++                headers: {
++                    "Accept": "application/json",
++                    "Content-Type": "application/json",
++                    "X-CSRF-TOKEN": form.elements._token.value,
++                },
++                body: JSON.stringify({period, override_type: method.value, [field]: amount.value}),
++                signal: active.signal,
++            });
++            const data = await response.json();
++            if (active.signal.aborted) return;
++            result.replaceChildren();
++            if (!response.ok) {
++                line(data.errors ? Object.values(data.errors).flat().join(" ") : "Preview unavailable. Reload the page or try again.", "mt-2 text-red-800");
++                return;
++            }
++
++            line(`Proposed rent for ${period} · Approval required`, "mt-3 font-semibold");
++            line(`Automatic PHP ${data.automatic_daily_rental} daily · Proposed PHP ${data.daily_rental} daily · Difference PHP ${data.rental_difference} daily`);
++            line(`Proposed monthly total with CUSA: PHP ${data.total_monthly_rental_cusa} for ${data.billing_days} days.`);
++            if (data.zero_rent || data.out_of_range) {
++                line("This proposal needs explicit exception authority and supporting references. CUSA remains payable.", "mt-2 text-amber-900");
++            }
++            if (!data.contract_rate_consistent) {
++                line("The two-decimal equivalent rate cannot reproduce this daily amount in the lease template.", "mt-2 text-amber-900");
++            }
++        } catch (error) {
++            if (active.signal.aborted) return;
++            result.replaceChildren();
++            line("Preview unavailable. Reload the page or try again.", "mt-2 text-red-800");
++        } finally {
++            if (pending === active && !active.signal.aborted) preview.disabled = false;
++        }
++    });
++});
+--- before/resources/views/map/details.blade.php
++++ after/resources/views/map/details.blade.php
+@@ -1,4 +1,15 @@
+-<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>@include('sections.swatch',['section'=>$stall->section]) {{ optional($stall->section)->name ?? 'Unknown section' }}@if(optional($stall->section)->status === 'inactive') (Inactive)@endif</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)<div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Agreed daily rate / rental</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Reference monthly rental + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
++<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>@include('sections.swatch',['section'=>$stall->section]) {{ optional($stall->section)->name ?? 'Unknown section' }}@if(optional($stall->section)->status === 'inactive') (Inactive)@endif</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)@php($assessedSection = $assessment->market_section_name ?? ($assessment->basis['stall_section_name'] ?? null)) @if($assessedSection !== null && $assessedSection !== optional($stall->section)->name)<div class="detailrow"><dt>Assessed section</dt><dd>{{ $assessedSection }}</dd></div>@endif <div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Initial assessed daily rate / rent</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Initial assessed monthly rent + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
++@if($assignment && $canSeeComputation)
++    <section class="mt-5">
++        <h3>Applicable rental preview · {{ $period }}</h3>
++        <p class="text-sm text-slate-600 mt-2">Issued records keep their saved assessments.</p>
++        @include('rental-overrides.quote')
++        @can('rentals.override.history')
++            <a class="btn secondary mt-3" href="{{ route('rental-overrides.index',['tenant'=>$assignment->tenant_id,'assignment'=>$assignment,'period'=>$period]) }}">Override history</a>
++        @endcan
++    </section>
++@endif
++
+ @can('contracts.view')<div class="detailrow"><dt>Lease status</dt><dd>@if($lease)<a class="underline text-blue-800" href="{{ route('contracts.show',$lease) }}">{{ ucfirst($lease->status) }} · {{ $lease->control_number }}</a>@else No lease contract @endif</dd></div>@endcan @can('payments.view')<h3 class="mt-5 mb-2">Latest posted payments</h3>@forelse($payments as $payment)<a class="detailrow text-blue-800" href="{{ route('payments.show',$payment) }}"><span>{{ $payment->payment_date }}</span><strong>PHP {{ number_format((float)$payment->amount,2) }}</strong></a>@empty<p class="text-sm text-slate-600">No posted payments.</p>@endforelse @endcan
+ @can('tenants.view')<details class="mt-5"><summary class="cursor-pointer font-semibold">Assignment history</summary>@forelse($history as $a)<p class="text-sm border-b py-3">{{ $a->tenant->name }}<br>{{ $a->start_date }} – {{ $a->end_date ?: 'Ongoing' }} · {{ $a->status }}</p>@empty<p class="text-sm py-3">No assignments recorded.</p>@endforelse</details>@endcan
+ <div class="flex flex-wrap gap-2 mt-5"><a class="btn secondary" href="{{ route('records.show',['stalls',$stall->id]) }}">Full stall record</a>@can('update',$stall)<a class="btn secondary" href="{{ route('records.edit',['stalls',$stall->id]) }}">Edit stall</a>@endcan @can('assignments.manage')@if(!$assignment && in_array($stall->status,['vacant','reserved'],true) && optional($stall->section)->status === 'active' && optional($stall->section)->market_id === $stall->market_id && $stall->market->status === 'active')<a class="btn" href="{{ route('assignments.create',['stall_id'=>$stall->id]) }}">Assign tenant</a>@elseif($assignment)<a class="btn secondary" href="{{ route('assignments.transfer-form',$assignment) }}">Transfer / renew</a><a class="btn secondary" href="{{ route('assignments.index',['stall_id'=>$stall->id]) }}">End assignment</a>@endif @endcan @if($assignment)<a class="btn secondary" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">Tenant record</a>@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$assignment->tenant_id]) }}">Billing history</a>@endcan @can('payments.record')<a class="btn" href="{{ route('payments.create',['tenant_id'=>$assignment->tenant_id]) }}">Record payment</a>@endcan @endif @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['stall_id'=>$stall->id]) }}">Payment history</a>@endcan</div>
+--- before/resources/views/map/index.blade.php
++++ after/resources/views/map/index.blade.php
+@@ -28,29 +28,37 @@
+     <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>
+         @foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)
+             <option value="{{ $value }}" @if(request('location_type') === $value) selected @endif>{{ $label }}</option>
+         @endforeach
+     </select></div>
+     @can('tenants.view')
+         <div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>
+             @foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id') == $category->id) selected @endif>{{ $category->name }}</option>@endforeach
+         </select></div>
+     @endcan
++    @if($canSeeComputation)
++        <div><label for="map-period">Rental reference month</label><input id="map-period" name="period" type="month" value="{{ $period }}"></div>
++        <div><label for="computation_mode">Rental computation</label><select id="computation_mode" name="computation_mode">
++            <option value="">All</option>
++            <option value="automatic" @if(request('computation_mode') === 'automatic') selected @endif>Automatic</option>
++            <option value="manual_override" @if(request('computation_mode') === 'manual_override') selected @endif>Approved manual override</option>
++        </select></div>
++    @endif
+     <button class="btn">Apply filters</button>
+ </form>
+ <div class="grid xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)] gap-5 items-start">
+     <section class="panel min-w-0">
+         <h2 class="mb-4">{{ $market ? $market->name : 'No market registered' }}</h2>
+         <div class="overflow-x-auto pb-4" role="region" aria-label="Stall layout" tabindex="0">
+             <div class="grid gap-3" style="grid-template-columns:repeat({{ $layout ? $layout->columns : 6 }},minmax(76px,1fr));min-width:{{ ($layout ? $layout->columns : 6)*88 }}px">
+                 @forelse($stalls as $stall)
+-                    <button type="button" class="stall status-{{ $stall->status }}" data-stall-url="{{ route('map.details',$stall) }}" aria-pressed="false"
++                    <button type="button" class="stall status-{{ $stall->status }}" data-stall-url="{{ route('map.details',['stall'=>$stall] + ($canSeeComputation ? ['period'=>$period] : [])) }}" aria-pressed="false"
+                             @if($stall->position) style="grid-column:{{ $stall->position->column }} / span {{ $stall->position->width }};grid-row:{{ $stall->position->row }} / span {{ $stall->position->height }}" @endif>
+                         <strong class="block text-sm">{{ $stall->code }}</strong>
+                         <span class="block text-xs mt-2">{{ ucfirst($stall->status) }}</span>
+                         <span class="flex justify-center items-center gap-1 mt-1 text-xs break-all">
+                             @include('sections.swatch',['section'=>$stall->section]){{ optional($stall->section)->name ?? 'Unknown section' }}
+                         </span>
+                     </button>
+                 @empty
+                     <p class="empty col-span-full">No stalls match this view.</p>
+                 @endforelse
+--- before/resources/views/rental-overrides/decision.blade.php
++++ after/resources/views/rental-overrides/decision.blade.php
+@@ -0,0 +1,17 @@
++@php($decisionId = $action.'-'.$override->id)
++<details class="mt-4" @if(old('decision_id') === $decisionId && $errors->any()) open @endif>
++    <summary class="cursor-pointer text-sm font-semibold text-blue-900">{{ $label }}</summary>
++    <form class="max-w-xl mt-2" method="post" action="{{ route('rental-overrides.'.$action,$rowContext) }}" data-confirm="{{ $label }}?">
++        @csrf
++        <input type="hidden" name="decision_id" value="{{ $decisionId }}">
++        @if($action === 'revoke')
++            <label for="{{ $decisionId }}-date">First day of return month (required)</label>
++            <input id="{{ $decisionId }}-date" type="date" name="revocation_effective_from" required
++                   value="{{ old('decision_id') === $decisionId && is_string(old('revocation_effective_from')) ? old('revocation_effective_from') : '' }}">
++            <p class="text-sm text-slate-600 mt-2">Choose a prospective first of the month outside frozen billing and contract obligations.</p>
++        @endif
++        <label for="{{ $decisionId }}-reason">Reason (required)</label>
++        <textarea id="{{ $decisionId }}-reason" name="reason" maxlength="1000" rows="2" required>{{ old('decision_id') === $decisionId && is_string(old('reason')) ? old('reason') : '' }}</textarea>
++        <button class="btn danger mt-3" type="submit">{{ $label }}</button>
++    </form>
++</details>
+--- before/resources/views/rental-overrides/form.blade.php
++++ after/resources/views/rental-overrides/form.blade.php
+@@ -0,0 +1,107 @@
++@extends('layouts.app')
++@section('title',$draft->exists ? 'Edit Rental Override Draft' : 'Request Manual Rental Override')
++@section('subtitle',$tenant->name.' · '.$assignment->stall->code.' · '.(optional($assignment->business)->name ?? 'Business unavailable'))
++@section('content')
++@php
++    $context = compact('tenant', 'assignment', 'period');
++    $target = $draft->exists ? route('rental-overrides.update', $context + ['override'=>$draft]) : route('rental-overrides.store', $context);
++    $oldScalar = static function ($key, $value = null) {
++        $input = old($key, $value);
++        return is_scalar($input) ? $input : $value;
++    };
++    $type = $oldScalar('override_type', $draft->override_type);
++@endphp
++<section class="panel max-w-4xl">
++    <div class="flex flex-wrap items-start justify-between gap-3">
++        <div>
++            <h2>Proposed rental terms</h2>
++            <p class="text-sm text-slate-600 mt-2">Current section {{ optional($assignment->stall->section)->name ?? 'Unknown' }} · Return to reference month {{ $period }}</p>
++        </div>
++        @can('rentals.override.history')
++            <a class="btn secondary" href="{{ route('rental-overrides.index',$context) }}">Override history</a>
++        @else
++            <a class="btn secondary" href="{{ route('records.show',['tenants',$tenant->id,'tab'=>auth()->user()->can('billing.view') ? 'rental' : 'overview','period'=>$period]) }}">Tenant record</a>
++        @endcan
++    </div>
++    @if($assessment)
++        <p class="text-sm mt-4">Frozen automatic basis · {{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</p>
++        <p class="text-sm text-slate-600 mt-1">PHP {{ $assessment->rental_rate_sqm }} per sq. m. · PHP {{ $assessment->daily_rental }} daily · Approved range PHP {{ $assessment->minimum_rate }}–{{ $assessment->maximum_rate }} per sq. m.</p>
++    @endif
++    @if(!$earliest)
++        <p class="notice mt-4">This assignment has no eligible full prospective month. The saved draft remains in history.</p>
++    @endif
++    @if($draft->source_override_id)
++        <p class="text-sm text-slate-600 mt-3">Revision of request #{{ $draft->source_override_id }}. Enter the revised terms below.</p>
++    @endif
++    <form action="{{ $target }}" method="post" class="mt-5"
++          data-rental-override data-preview-url="{{ route('rental-overrides.preview',compact('tenant','assignment')) }}">
++        @csrf
++        @if($draft->exists) @method('PUT') <input type="hidden" name="draft_fingerprint" value="{{ $fingerprint }}"> @endif
++        <input type="hidden" name="period" value="{{ $period }}">
++        <input type="hidden" name="submission_key" value="{{ $draft->exists ? $draft->submission_key : $oldScalar('submission_key',$draft->submission_key) }}">
++        @if($draft->source_override_id)<input type="hidden" name="source_override_id" value="{{ $draft->source_override_id }}">@endif
++        <fieldset @unless($earliest) disabled @endunless>
++            <legend class="sr-only">Amount and effective period</legend>
++            <div class="grid gap-x-4 sm:grid-cols-2">
++                <div>
++                    <label for="override_type">Override method (required)</label>
++                    <select id="override_type" name="override_type" required>
++                        <option value="rate_per_sqm" @if($type === 'rate_per_sqm') selected @endif>Rate per square meter</option>
++                        <option value="daily_amount" @if($type === 'daily_amount') selected @endif>Direct daily amount</option>
++                    </select>
++                </div>
++                @foreach(['rate_per_sqm'=>['override_rate_per_sqm','Rate per square meter (PHP)'],'daily_amount'=>['override_daily_amount','Daily rent (PHP)']] as $method=>[$field,$label])
++                    <div data-override-amount="{{ $method }}" @unless($type === $method) hidden @endunless>
++                        <label for="{{ $field }}">{{ $label }}</label>
++                        <input id="{{ $field }}" name="{{ $field }}" type="text" inputmode="decimal" maxlength="15" pattern="[0-9]+(\.[0-9]{1,2})?"
++                               value="{{ $oldScalar($field,$draft->$field) }}" @if($type === $method) required @else disabled @endif>
++                    </div>
++                @endforeach
++                <div>
++                    <label for="effective_from">First day of effective month (required)</label>
++                    <input id="effective_from" name="effective_from" type="date" value="{{ $oldScalar('effective_from',$draft->effective_from ?? $defaultStart) }}"
++                           @if($earliest) min="{{ $earliest }}" @endif @if($lastFullMonth) max="{{ $lastFullMonth }}" @endif required>
++                </div>
++                <div>
++                    <label for="effective_until">Last day of final month{{ $assignment->end_date ? ' (required)' : ' (optional)' }}</label>
++                    <input id="effective_until" name="effective_until" type="date" value="{{ $oldScalar('effective_until',$draft->effective_until ?? $lastFullMonth) }}"
++                           @if($lastFullMonth) max="{{ $lastFullMonth }}" required @endif>
++                </div>
++            </div>
++            <p class="text-sm text-slate-600 mt-2">Choose full prospective billing months. @if($earliest)Earliest available start {{ $earliest }}.@endif</p>
++            <div class="mt-4">
++                <button class="btn secondary" type="button" data-override-preview hidden>Preview proposed rent</button>
++                <div aria-live="polite" class="text-sm" data-override-result></div>
++                <noscript><p class="text-sm text-slate-600">Enable JavaScript to switch amount methods and preview the proposed rent.</p></noscript>
++            </div>
++            <label for="override_reason">Reason (required)</label>
++            <textarea id="override_reason" name="reason" rows="3" maxlength="1000" required>{{ $oldScalar('reason',$draft->reason) }}</textarea>
++            <label for="reference_document">Supporting reference</label>
++            <input id="reference_document" name="reference_document" value="{{ $oldScalar('reference_document',$draft->reference_document) }}" maxlength="255"
++                   aria-describedby="override-reference-help">
++            <p class="text-sm text-slate-600 mt-1" id="override-reference-help">Zero or out-of-range rent requires a supporting reference and explicit policy authority.</p>
++            <label for="override_remarks">Remarks</label>
++            <textarea id="override_remarks" name="remarks" rows="2" maxlength="2000">{{ $oldScalar('remarks',$draft->remarks) }}</textarea>
++            <div class="flex flex-wrap gap-2 mt-5">
++                @if($draft->exists)
++                    <button class="btn" type="submit">Save draft changes</button>
++                @else
++                    <button class="btn secondary" type="submit" name="intent" value="save">Save draft</button>
++                    <button class="btn" type="submit" name="intent" value="submit">Submit for review</button>
++                @endif
++            </div>
++        </fieldset>
++    </form>
++    @if($draft->exists && $earliest && !session()->hasOldInput('override_type'))
++        <form method="post" action="{{ route('rental-overrides.submit',$context + ['override'=>$draft]) }}" class="mt-5 border-t border-slate-200 pt-4"
++              data-confirm="Submit the saved draft for review?">
++            @csrf
++            <input type="hidden" name="period" value="{{ $period }}">
++            <input type="hidden" name="draft_fingerprint" value="{{ $fingerprint }}">
++            <p class="text-sm text-slate-600 mb-2">Submission freezes the saved terms. Save any edits before submitting.</p>
++            <button class="btn secondary" type="submit" data-submit-saved-draft>Submit saved draft</button>
++        </form>
++    @endif
++</section>
++<script defer src="{{ asset('assets/rental-overrides.js') }}"></script>
++@endsection
+--- before/resources/views/rental-overrides/index.blade.php
++++ after/resources/views/rental-overrides/index.blade.php
+@@ -0,0 +1,117 @@
++@extends('layouts.app')
++@section('title','Rental Override History')
++@section('subtitle',$tenant->name.' · '.$assignment->stall->code.' · '.(optional($assignment->business)->name ?? 'Business unavailable'))
++@section('actions')
++<div class="flex flex-wrap gap-2">
++    <a class="btn secondary" href="{{ route('records.show',['tenants',$tenant->id,'tab'=>auth()->user()->can('billing.view') ? 'rental' : 'overview','period'=>$period]) }}">Tenant record</a>
++    @if($earliest)<a class="btn" href="{{ route('rental-overrides.create',compact('tenant','assignment','period')) }}">Request manual override</a>@endif
++</div>
++@endsection
++@section('content')
++@if(session('rental_mode_notice'))<p class="notice" role="status">{{ session('rental_mode_notice') }}</p>@endif
++@php
++    $context = compact('tenant','assignment','period');
++@endphp
++<section class="panel">
++    <div class="flex flex-wrap justify-between items-start gap-4">
++        <div>
++            <h2>Applicable rental · {{ $period }}</h2>
++            <p class="mt-2 text-sm text-slate-600">Reference-month preview for this assignment. Issued records keep their saved assessments.</p>
++        </div>
++        <form method="get" class="toolbar">
++            <div><label for="override-period">Reference month</label><input id="override-period" name="period" type="month" value="{{ $period }}" required></div>
++            <button class="btn secondary" type="submit">Apply month</button>
++        </form>
++    </div>
++    @include('rental-overrides.quote')
++</section>
++<section class="panel mt-5">
++    <h2>Requests and decisions</h2>
++    <p class="text-sm text-slate-600 mt-2">Request status is shown on the first day of {{ $period }}. Only applicable approved terms change rent.</p>
++    @forelse($rows as $override)
++        @php
++            $status = $override->displayStatus($period.'-01');
++            $approval = $review[$override->id] ?? null;
++            $policy = $override->authority_snapshot ?? ($approval['policy'] ?? null);
++            $rowContext = $context + compact('override');
++        @endphp
++        <article class="border-t border-slate-200 mt-5 pt-5" id="request-{{ $override->id }}">
++            <div class="flex flex-wrap items-start justify-between gap-2">
++                <h3>Request #{{ $override->id }} · Revision {{ $override->revision }}</h3>
++                <span class="badge {{ $status === 'approved' ? 'status-occupied' : ($status === 'pending' ? 'status-reserved' : '') }}">{{ ucfirst($status) }}</span>
++            </div>
++            <dl class="mt-2">
++                <div class="detailrow"><dt>Requested by</dt><dd>{{ $override->requester->name }}</dd></div>
++                @if($override->source_override_id)<div class="detailrow"><dt>Revised from</dt><dd>Request #{{ $override->source_override_id }}</dd></div>@endif
++                <div class="detailrow"><dt>Requested effective period</dt><dd>{{ $override->effective_from }} – {{ $override->effective_until ?? 'Open-ended' }}</dd></div>
++                @if($status === 'approved' && $override->effective_from > $period.'-01')
++                    <div class="detailrow"><dt>Applicability</dt><dd>Scheduled for a later month</dd></div>
++                @endif
++                <div class="detailrow"><dt>Frozen category / location / floor area</dt><dd>{{ $override->initialAssessment->business_category_name }} · {{ ucfirst($override->initialAssessment->location_type) }} · {{ $override->initialAssessment->floor_area }} sq. m.</dd></div>
++                <div class="detailrow"><dt>Automatic rate and approved range</dt><dd>PHP {{ $override->automatic_rate_per_sqm }} per sq. m.<br>PHP {{ $override->initialAssessment->minimum_rate }}–{{ $override->initialAssessment->maximum_rate }} per sq. m.</dd></div>
++                <div class="detailrow"><dt>Automatic daily rent</dt><dd>PHP {{ $override->automatic_daily_rental }}</dd></div>
++                <div class="detailrow"><dt>Method and entered amount</dt><dd>{{ $override->override_type === 'rate_per_sqm' ? 'PHP '.$override->override_rate_per_sqm.' per sq. m.' : 'PHP '.$override->override_daily_amount.' direct daily' }}</dd></div>
++                <div class="detailrow"><dt>Proposed daily rent</dt><dd>PHP {{ $override->proposed_daily_rental }}</dd></div>
++                <div class="detailrow"><dt>Proposed daily difference</dt><dd>PHP {{ $override->rental_difference }}</dd></div>
++                <div class="detailrow"><dt>Reason</dt><dd class="min-w-0 whitespace-pre-wrap">{{ $override->reason }}</dd></div>
++                @if($override->reference_document !== null)<div class="detailrow"><dt>Supporting reference</dt><dd class="min-w-0">{{ $override->reference_document }}</dd></div>@endif
++                @if($override->remarks !== null)<div class="detailrow"><dt>Remarks</dt><dd class="min-w-0 whitespace-pre-wrap">{{ $override->remarks }}</dd></div>@endif
++                @if($override->approved_at)
++                    <div class="detailrow"><dt>Approved by</dt><dd>{{ $override->approver->name }} · {{ $override->approved_at->format('Y-m-d H:i') }}</dd></div>
++                @endif
++                @if($override->rejection_reason !== null)<div class="detailrow"><dt>Rejection reason · {{ optional($override->rejected_at)->format('Y-m-d H:i') }}</dt><dd class="min-w-0">{{ $override->rejection_reason }}</dd></div>@endif
++                @if($override->revocation_effective_from)
++                    <div class="detailrow"><dt>Revocation effective</dt><dd>{{ $override->revocation_effective_from }}</dd></div>
++                    <div class="detailrow"><dt>Revocation reason</dt><dd class="min-w-0">{{ $override->revocation_reason }}</dd></div>
++                @endif
++            </dl>
++            @if($policy)
++                <details class="mt-4" @if($approval) open @endif>
++                    <summary class="cursor-pointer font-medium text-sm">{{ $approval ? 'Policy for this approval' : 'Policy recorded at approval' }}</summary>
++                    <dl class="mt-2">
++                        <div class="detailrow"><dt>Policy revision / reference</dt><dd>#{{ $policy['id'] }} · {{ $policy['reference_document'] }}</dd></div>
++                        <div class="detailrow"><dt>Policy effective period</dt><dd>{{ $policy['effective_from'] }} – {{ $policy['effective_until'] ?? 'Open-ended' }}</dd></div>
++                        <div class="detailrow"><dt>Out-of-range overrides authorized</dt><dd>{{ $policy['allow_out_of_range_overrides'] ? 'Yes' : 'No' }}</dd></div>
++                        <div class="detailrow"><dt>Zero-rent overrides authorized</dt><dd>{{ $policy['allow_zero_rent_overrides'] ? 'Yes' : 'No' }}</dd></div>
++                        <div class="detailrow"><dt>Exception authority reference</dt><dd>{{ $policy['override_authority_reference'] ?? '—' }}</dd></div>
++                    </dl>
++                </details>
++            @endif
++            @if($approval && !$policy)<p class="notice mt-4">One approved policy must cover the entire requested period before approval.</p>@endif
++            <div class="flex flex-wrap gap-3 items-start mt-4">
++                @if(isset($fingerprints[$override->id]))
++                    <a class="btn secondary" href="{{ route('rental-overrides.edit',$rowContext) }}">Edit draft</a>
++                    @if($earliest)
++                        <form method="post" action="{{ route('rental-overrides.submit',$rowContext) }}" data-confirm="Submit these saved terms for review?">
++                            @csrf
++                            <input type="hidden" name="draft_fingerprint" value="{{ $fingerprints[$override->id] }}">
++                            <button class="btn" type="submit">Submit saved draft</button>
++                        </form>
++                    @endif
++                @elseif($earliest && $override->status !== 'draft')
++                    <a class="btn secondary" href="{{ route('rental-overrides.create',$context + ['source_override_id'=>$override->id]) }}">Create revised request</a>
++                @endif
++                @if($approval && $policy)
++                    <form method="post" action="{{ route('rental-overrides.approve',$rowContext) }}" data-confirm="Approve the displayed request and policy?">
++                        @csrf
++                        <input type="hidden" name="fingerprint" value="{{ $approval['fingerprint'] }}">
++                        <button class="btn" type="submit">Approve request</button>
++                    </form>
++                @endif
++            </div>
++            @if($override->status === 'pending')
++                @can('rentals.override.reject')
++                    @include('rental-overrides.decision',['action'=>'reject','label'=>'Reject request'])
++                @endcan
++            @elseif($override->status === 'approved' && $override->displayStatus() === 'approved')
++                @can('rentals.override.revoke')
++                    @include('rental-overrides.decision',['action'=>'revoke','label'=>'Return to automatic'])
++                @endcan
++            @endif
++        </article>
++    @empty
++        <p class="empty">No rental override requests recorded.</p>
++    @endforelse
++    <div class="mt-5">{{ $rows->links() }}</div>
++</section>
++@endsection
+--- before/resources/views/rental-overrides/quote.blade.php
++++ after/resources/views/rental-overrides/quote.blade.php
+@@ -0,0 +1,18 @@
++@if($quote)
++    <dl class="mt-2">
++        <div class="detailrow"><dt>Automatic daily rent</dt><dd>PHP {{ $quote['automatic_daily_rental'] }}</dd></div>
++        <div class="detailrow"><dt>Applicable daily rent</dt><dd>PHP {{ $quote['daily_rental'] }}</dd></div>
++        <div class="detailrow"><dt>Daily difference from automatic</dt><dd>PHP {{ $quote['rental_difference'] }}</dd></div>
++        <div class="detailrow"><dt>Rental computation</dt><dd>
++            @if($quote['computation_mode'] === 'manual_override')
++                Manual override<br><span class="badge status-occupied">Approved override applies</span>
++            @else Automatic @endif
++        </dd></div>
++        <div class="detailrow"><dt>Monthly rent / CUSA</dt><dd>PHP {{ $quote['monthly_rental'] }} / {{ $quote['monthly_cusa'] }}</dd></div>
++        <div class="detailrow"><dt>Monthly total · {{ $quote['billing_days'] }} days</dt><dd>PHP {{ $quote['total_monthly_rental_cusa'] }}</dd></div>
++    </dl>
++@elseif($quoteError)
++    <p class="text-sm text-red-800 mt-2">{{ $quoteError }}</p>
++@else
++    <p class="text-sm text-slate-600 mt-2">An applicable daily rent is unavailable for this assignment and reference month.</p>
++@endif
+--- before/resources/views/reports/print.blade.php
++++ after/resources/views/reports/print.blade.php
+@@ -1,10 +1,10 @@
+-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{{ $title }}</title><style>body{font-family:DejaVu Sans,Arial,sans-serif;font-size:10px;color:#17253b}h1{font-size:20px}.record-detail{margin-bottom:18px;page-break-inside:avoid}.record-detail h2{font-size:13px}.record-detail th{font-weight:600}.record-detail td,.record-detail th{padding:5px 7px}table{width:100%;border-collapse:collapse}td,th{padding:7px;border-bottom:1px solid #ddd;text-align:left;overflow-wrap:anywhere}th{background:#eef2f7}thead{display:table-header-group}tr{page-break-inside:avoid}@media print{button{display:none}}</style></head><body><h1>MarketHub · {{ $title }}</h1><p>Generated {{ now()->format('Y-m-d H:i') }} Asia/Manila. Current records; payment references are not issued receipts.</p>@if(count($columns)>12)
++<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{{ $title }}</title><style>body{font-family:DejaVu Sans,Arial,sans-serif;font-size:10px;color:#17253b}h1{font-size:20px}.record-detail{margin-bottom:18px;page-break-inside:avoid}.record-detail h2{font-size:13px}.record-detail th{font-weight:600}.record-detail td,.record-detail th{padding:5px 7px}table{width:100%;border-collapse:collapse;table-layout:fixed}td,th{padding:7px;border-bottom:1px solid #ddd;text-align:left;overflow-wrap:break-word}th{background:#eef2f7}thead{display:table-header-group}tr{page-break-inside:avoid}@media print{button{display:none}}</style></head><body><h1>MarketHub · {{ $title }}</h1><p>Generated {{ now()->format('Y-m-d H:i') }} Asia/Manila. {{ $reportNote ?? 'Current records. Official receipts are issued through the Treasury workflow.' }}</p>@if(count($columns)>12)
+ @foreach($rows as $row)
+ <section class="record-detail"><h2>{{ ucwords(str_replace('_',' ',$columns[0])) }}: {{ ((array)$row)[$columns[0]] }}</h2>
+ <table><tbody>@foreach(array_chunk((array)$row,2,true) as $fields)<tr>@foreach($fields as $field=>$value)<th style="width:20%">{{ ucwords(str_replace('_',' ',$field)) }}</th><td style="width:30%">{{ $value ?? '—' }}</td>@endforeach</tr>@endforeach</tbody></table>
+ </section>
+ @endforeach
+ @else
+ <table><thead><tr>@foreach($columns as $column)<th>{{ ucwords(str_replace('_',' ',$column)) }}</th>@endforeach</tr></thead><tbody>@forelse($rows as $row)<tr>@foreach((array)$row as $value)<td>{{ $value ?? '—' }}</td>@endforeach</tr>@empty<tr><td>No matching records.</td></tr>@endforelse</tbody></table>
+ @endif
+ </body></html>
+--- before/resources/views/reports/show.blade.php
++++ after/resources/views/reports/show.blade.php
+@@ -1,5 +1,81 @@
+-@extends('layouts.app')
+-@section('title',$title)
+-@section('subtitle',in_array($type,['business-categories','rental-assessments','lease-contract-registry']) ? 'Category schedules, frozen assessments and contract history retain their source references. Draft schedules are not authority to assess rental.' : 'Current posted transaction values; reversed payments are excluded from collection totals.')
+-@section('content')<section class="panel"><form class="toolbar mb-5">@foreach(['from'=>'From date','to'=>'To date'] as $key=>$label)<div><label for="{{ $key }}">{{ $label }}</label><input id="{{ $key }}" type="date" name="{{ $key }}" value="{{ request($key) }}"></div>@endforeach @foreach(\App\Services\Reports::scopeFilters($type) as $key=>$label)<div><label for="{{ $key }}">{{ $label }} ID</label><input id="{{ $key }}" name="{{ $key }}" type="number" min="1" value="{{ request($key) }}"></div>@endforeach @if(in_array($type,['business-categories','rental-assessments','lease-contract-registry']))<div><label for="business_category_id">Business category ID</label><input id="business_category_id" type="number" min="1" name="business_category_id" value="{{ request('business_category_id') }}"></div>@endif @if(in_array($type,['rental-assessments','lease-contract-registry']))<div><label for="location_type">Assessed location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Legacy / unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>@endif
+-@if($type==='lease-contract-registry')<div><label for="status">Lease status</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['draft','ready','issued','signed','active','expired','terminated','void'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>@endif<button class="btn secondary">Filter</button></form><div class="flex flex-wrap gap-2 mb-5">@foreach(['csv'=>'CSV','xlsx'=>'Excel','pdf'=>'PDF','print'=>'Print view'] as $format=>$label)<a class="btn secondary" href="{{ route('reports.show',array_merge(request()->except('page','format'),['type'=>$type,'format'=>$format])) }}">{{ $label }}</a>@endforeach</div><div class="tablewrap"><table><thead><tr>@if($rows->count())@foreach(array_keys((array)$rows->first()) as $column)<th>{{ ucwords(str_replace('_',' ',$column)) }}</th>@endforeach @endif</tr></thead><tbody>@forelse($rows as $row)<tr>@foreach((array)$row as $value)<td>{{ $value ?? '—' }}</td>@endforeach</tr>@empty<tr><td class="empty">No matching records.</td></tr>@endforelse</tbody></table></div><div class="mt-5">{{ $rows->links() }}</div></section>@endsection
++@extends('layouts.app')
++@section('title',$title)
++@section('subtitle',$reportNote ?? (in_array($type,['business-categories','rental-assessments','lease-contract-registry'],true)
++    ? 'Category schedules, frozen assessments and contract history retain their source references. Only approved schedules authorize rental assessments.'
++    : 'Current posted transaction values. Collection totals exclude reversed payments.'))
++@section('content')
++<section class="panel">
++    <form class="toolbar mb-5" method="get">
++        @if(!in_array($type, ['rental-overrides', 'stall-master', 'occupied-stalls', 'vacant-stalls', 'tenant-master'], true))
++            @foreach(['from'=>'From date','to'=>'To date'] as $key=>$label)
++                <div><label for="{{ $key }}">{{ $label }}</label><input id="{{ $key }}" type="date" name="{{ $key }}" value="{{ $filters[$key] ?? '' }}"></div>
++            @endforeach
++        @endif
++        @foreach(\App\Services\Reports::scopeFilters($type) as $key=>$label)
++            <div><label for="{{ $key }}">{{ $label }} ID</label><input id="{{ $key }}" name="{{ $key }}" type="number" min="1" value="{{ $filters[$key] ?? '' }}" @if($type === 'tenant-statement' && $key === 'tenant_id') required @endif></div>
++        @endforeach
++        @if(in_array($type,['business-categories','rental-assessments','rental-overrides','lease-contract-registry'],true))
++            <div><label for="business_category_id">Business category ID</label><input id="business_category_id" type="number" min="1" name="business_category_id" value="{{ $filters['business_category_id'] ?? '' }}"></div>
++        @endif
++        @if(in_array($type,['rental-assessments','lease-contract-registry'],true))
++            <div>
++                <label for="location_type">Assessed location</label>
++                <select id="location_type" name="location_type">
++                    <option value="">All locations</option>
++                    @foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Legacy / unclassified'] as $value=>$label)
++                        <option value="{{ $value }}" @if(($filters['location_type'] ?? null) === $value) selected @endif>{{ $label }}</option>
++                    @endforeach
++                </select>
++            </div>
++        @endif
++        @if(in_array($type,['rental-assessments','rental-overrides'],true))
++            <div><label for="as_of">{{ $type === 'rental-overrides' ? 'Applicability date' : 'Recorded by date' }}</label>
++                <input id="as_of" type="date" name="as_of" value="{{ $filters['as_of'] ?? '' }}">
++            </div>
++        @endif
++        @if($type === 'rental-overrides' || ($type === 'rental-assessments' && $canSeeAssessmentMode))
++            <div><label for="computation_mode">Rental computation</label><select id="computation_mode" name="computation_mode">
++                <option value="">All modes</option>
++                <option value="automatic" @if(($filters['computation_mode'] ?? null) === 'automatic') selected @endif>Automatic</option>
++                <option value="manual_override" @if(($filters['computation_mode'] ?? null) === 'manual_override') selected @endif>Manual override</option>
++            </select></div>
++        @endif
++        @if(in_array($type,['lease-contract-registry','rental-overrides'],true))
++            <div>
++                <label for="status">{{ $type === 'rental-overrides' ? 'Request status' : 'Lease status' }}</label>
++                <select id="status" name="status">
++                    <option value="">All statuses</option>
++                    @foreach($type === 'rental-overrides' ? ['draft','pending','approved','rejected','revoked','expired'] : ['draft','ready','issued','signed','active','expired','terminated','void'] as $status)
++                        <option value="{{ $status }}" @if(($filters['status'] ?? null) === $status) selected @endif>{{ ucfirst($status) }}</option>
++                    @endforeach
++                </select>
++            </div>
++        @endif
++        <button class="btn secondary" type="submit">Filter</button>
++    </form>
++    <div class="flex flex-wrap gap-2 mb-5">
++        @foreach(['csv'=>'CSV','xlsx'=>'Excel','pdf'=>'PDF','print'=>'Print view'] as $format=>$label)
++            <a class="btn secondary" href="{{ route('reports.show', array_merge($filters, ['type'=>$type,'format'=>$format])) }}">{{ $label }}</a>
++        @endforeach
++    </div>
++    <div class="tablewrap" role="region" aria-label="{{ $title }} results" tabindex="0">
++        <table>
++            <thead><tr>
++                @if($rows->count())
++                    @foreach(array_keys((array) $rows->first()) as $column)
++                        <th scope="col">{{ ucwords(str_replace('_',' ',$column)) }}</th>
++                    @endforeach
++                @endif
++            </tr></thead>
++            <tbody>
++                @forelse($rows as $row)
++                    <tr>@foreach((array) $row as $value)<td>{{ $value ?? '—' }}</td>@endforeach</tr>
++                @empty
++                    <tr><td class="empty">No matching records.</td></tr>
++                @endforelse
++            </tbody>
++        </table>
++    </div>
++    <div class="mt-5">{{ $rows->links() }}</div>
++</section>
++@endsection
+--- before/resources/views/tenants/form.blade.php
++++ after/resources/views/tenants/form.blade.php
+@@ -66,20 +66,21 @@
+             @endforeach
+         </div>
+         <template data-assignment-template>@include('tenants.registration-assignment', ['assignmentKey'=>'__ASSIGNMENT__','selection'=>[]])</template>
+         @if($stalls->isNotEmpty())
+             <button type="button" class="btn secondary mt-2" data-add-assignment hidden>Add stall selection</button>
+             <span class="text-sm text-slate-600 ml-2" data-add-assignment-help></span>
+         @endif
+     </section>
+     <section class="panel mt-5 scroll-mt-4" id="rental">
+         <h2>Rental preview</h2>
++        @can('rentals.override.request')<p class="text-sm text-slate-600 mt-2">After confirming a stall assignment, open Rental Information on the tenant record to request a manual override.</p>@endcan
+         @can('assignments.manage')
+             <p class="text-sm text-slate-600 mt-2">The approved business-category rate uses the minimum for Inner and maximum for Outer. The server checks the rate and market policy again when you confirm.</p>
+             <p class="text-sm text-slate-600 mt-3" data-preview-empty>Choose a business, stall and start date to preview the rental.</p>
+             <div class="mt-3" aria-live="polite" data-previews></div>
+         @else
+             <p class="text-sm text-slate-600 mt-2">An assignment officer can preview rent and confirm selected stalls.</p>
+         @endcan
+     </section>
+     <section class="panel mt-5 scroll-mt-4" id="helpers">
+         <h2>Authorized helpers</h2>
+--- before/resources/views/tenants/index.blade.php
++++ after/resources/views/tenants/index.blade.php
+@@ -10,20 +10,25 @@
+     @can('reports.personal')<a class="btn secondary" href="{{ route('reports.show','tenant-master') }}">Stallholder masterlist</a>@endcan
+ </div>
+ <section class="panel" aria-label="Tenant list">
+     <form class="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-5" method="get">
+         <div class="sm:col-span-2"><label for="q">Tenant, business, stall, account or contact</label><input type="search" id="q" name="q" value="{{ request('q') }}" maxlength="100"></div>
+         <div><label for="status">Tenant status</label><select id="status" name="status"><option value="">All statuses</option>@foreach($tenantStatuses as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+         <div><label for="stall">Stall code</label><input id="stall" name="stall" value="{{ request('stall') }}" maxlength="40"></div>
+         @foreach(['business_category_id'=>['Business category',$businessCategories],'category_id'=>['Physical stall category',$categories],'market_id'=>['Market',$markets]] as $field=>[$label,$options])
+             <div><label for="{{ $field }}">{{ $label }}</label><select id="{{ $field }}" name="{{ $field }}"><option value="">All</option>@foreach($options as $option)<option value="{{ $option->id }}" @if(request($field)==$option->id)selected @endif>{{ $option->name }}</option>@endforeach</select></div>
+         @endforeach
++        <div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>
++            @foreach($sections as $section)
++                <option value="{{ $section->id }}" @if(request('section_id') == $section->id) selected @endif>{{ $markets->firstWhere('id',$section->market_id)->name ?? 'Unknown market' }} · {{ $section->name }}@if($section->status === 'inactive') (Inactive)@endif</option>
++            @endforeach
++        </select></div>
+         <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner','outer','unclassified'] as $location)<option value="{{ $location }}" @if(request('location_type')===$location)selected @endif>{{ ucfirst($location) }}</option>@endforeach</select></div>
+         @can('billing.view')
+             <div><label for="payment_status">Payment status</label><select id="payment_status" name="payment_status"><option value="">All payment statuses</option>@foreach(['overdue'=>'Overdue','outstanding'=>'Outstanding (including overdue)','settled'=>'Settled','unbilled'=>'Unbilled'] as $value=>$label)<option value="{{ $value }}" @if(request('payment_status')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+         @endcan
+         @can('contracts.view')
+             <div><label for="lease_status">Lease status</label><select id="lease_status" name="lease_status"><option value="">All lease statuses</option>@foreach($leaseStatuses as $status=>$label)<option value="{{ $status }}" @if(request('lease_status')===$status)selected @endif>{{ $label }}</option>@endforeach</select></div>
+         @endcan
+         <div class="flex flex-wrap items-end gap-2"><button type="submit" class="btn secondary">Filter</button><a class="btn secondary" href="{{ route('records.index','tenants') }}">Clear</a></div>
+     </form>
+     <div class="tablewrap"><table>
+--- before/resources/views/tenants/show.blade.php
++++ after/resources/views/tenants/show.blade.php
+@@ -1,20 +1,26 @@
+ @extends('layouts.app')
+ @section('title',$record->name)
+ @section('subtitle',$record->reference.' · '.ucfirst($record->status))
+ @section('actions')
+     @can('update',$record)
+         <a class="btn" href="{{ route('records.edit',['tenants',$record->id]) }}">{{ $record->status === 'draft' ? 'Resume registration' : 'Edit tenant' }}</a>
+     @endcan
+ @endsection
+ @section('content')
+ @if(session('duplicate_warning'))<p class="notice" role="status">{{ session('duplicate_warning') }}</p>@endif
++@if(session('rental_mode_notice'))<p class="notice" role="status">{{ session('rental_mode_notice') }}</p>@endif
++@if(session('registered_rental_link') && isset($tabs['rental']))
++    <p class="notice" role="status">The assignment starts with automatic rent.
++        <a class="underline font-semibold" href="{{ route('records.show',['tenants',$record->id,'tab'=>'rental']) }}">Open Rental Information</a> to review the basis or request an override.
++    </p>
++@endif
+ <nav class="flex flex-wrap gap-x-4 gap-y-1 border-b border-slate-200 mb-5" aria-label="Tenant profile sections">
+     @foreach($tabs as $key=>$label)
+         <a class="inline-flex min-h-11 items-center border-b-2 py-2 px-1 text-sm {{ $tab===$key ? 'border-blue-700 font-semibold text-blue-900' : 'border-transparent text-slate-700 hover:text-blue-800 hover:underline' }}" href="{{ route('records.show',['tenants',$record->id,'tab'=>$key]) }}" @if($tab===$key)aria-current="page"@endif>{{ $label }}</a>
+     @endforeach
+ </nav>
+ 
+ @switch($tab)
+ @case('overview')
+     <section class="panel" aria-labelledby="overview-heading">
+         <h2 id="overview-heading">Overview</h2>
+@@ -115,39 +121,81 @@
+         @empty <p class="text-sm text-slate-600 mt-4">No stall assignments recorded.</p> @endforelse
+         <div class="flex flex-wrap gap-3 mt-4">
+             <a class="btn secondary" href="{{ route('assignments.index',['tenant_id'=>$record->id]) }}">Assignment register</a>
+         </div>
+         <div class="mt-4">{{ $profileAssignments->links() }}</div>
+     </section>
+     @break
+ 
+ @case('rental')
+     <section class="panel">
+-        <h2>Rental information</h2>
++        <div class="flex flex-wrap justify-between items-start gap-4">
++            <h2>Rental information</h2>
++            @can('rentals.override.view')
++                <form class="toolbar" method="get">
++                    <input type="hidden" name="tab" value="rental">
++                    <div><label for="rental-period">Reference month</label><input id="rental-period" name="period" type="month" value="{{ $period }}" required></div>
++                    <button class="btn secondary" type="submit">Apply month</button>
++                </form>
++            @endcan
++        </div>
+         <div class="detailrow mt-2"><span class="font-semibold">Outstanding posted balance</span><span>PHP {{ $balance }}</span></div>
+         @forelse($profileAssignments as $assignment)
+             @php($agreement = $assignment->agreement)
+             @php($assessment = optional($agreement)->assessment)
+             <article class="mt-5 border-t border-slate-200 pt-4">
+                 <h3>{{ $assessment ? $assessment->stall_code : $assignment->stall->code }} · {{ optional($agreement)->reference ?: 'No agreement' }}</h3>
++                <p class="text-sm text-slate-600 mt-2">{{ optional($assignment->business)->name ?? 'Business unavailable' }} · {{ optional($assignment->stall->section)->name ?? 'Unknown section' }}@if(optional($assignment->stall->section)->status === 'inactive') (Inactive)@endif</p>
++                @php($frozenSection = $assessment ? ($assessment->market_section_name ?? ($assessment->basis['stall_section_name'] ?? null)) : null)
++                @if($frozenSection !== null && $frozenSection !== optional($assignment->stall->section)->name)
++                    <p class="text-sm text-slate-600 mt-1">Assessed section {{ $frozenSection }}</p>
++                @endif
++                @can('rentals.override.view')
++                    @php([$quote, $quoteError] = $rentalQuotes[$assignment->id])
++                    <h4 class="mt-4 font-medium">Applicable rental preview · {{ $period }}</h4>
++                    @include('rental-overrides.quote')
++                    <div class="flex flex-wrap items-end gap-3 mt-4">
++                        @if(!empty($requestMonths[$assignment->id]))
++                            <form class="toolbar" method="get" action="{{ route('rental-overrides.create',['tenant'=>$record,'assignment'=>$assignment]) }}">
++                                <input type="hidden" name="period" value="{{ $period }}">
++                                <div><label for="rental-mode-{{ $assignment->id }}">Choose rental mode for {{ $assignment->stall->code }}</label>
++                                    <select id="rental-mode-{{ $assignment->id }}" name="computation_mode">
++                                        <option value="automatic">Automatic (default)</option>
++                                        <option value="manual_override">Manual override request</option>
++                                    </select>
++                                </div>
++                                <button class="btn" type="submit">Continue</button>
++                            </form>
++                        @endif
++                        @can('rentals.override.history')
++                            <a class="btn secondary" href="{{ route('rental-overrides.index',['tenant'=>$record,'assignment'=>$assignment,'period'=>$period]) }}">Override history</a>
++                        @endcan
++                    </div>
++                    @if($assignment->pending_override_count)
++                        <p class="text-sm text-slate-600 mt-2">{{ $assignment->pending_override_count }} {{ Illuminate\Support\Str::plural('pending request',$assignment->pending_override_count) }} awaiting review.</p>
++                    @endif
++                @endcan
+                 @if($assessment)
+-                    <p class="text-sm text-slate-600 mt-2">{{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }} · Reference month {{ $assessment->period }}</p>
++                    <details class="mt-4" @if(empty($quote)) open @endif>
++                    <summary class="cursor-pointer font-medium text-sm">Initial assessment · {{ $assessment->period }}</summary>
++                    <p class="text-sm text-slate-600 mt-2">{{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }}</p>
+                     <dl class="mt-2">
+                         <div class="detailrow"><dt>Assessed floor area</dt><dd>{{ $assessment->floor_area }} sq. m.</dd></div>
+                         <div class="detailrow"><dt>Minimum / maximum per sq. m.</dt><dd>PHP {{ $assessment->minimum_rate }} / {{ $assessment->maximum_rate }}</dd></div>
+                         <div class="detailrow"><dt>Applied rental rate per sq. m.</dt><dd>PHP {{ $assessment->rental_rate_sqm }}</dd></div>
+                         <div class="detailrow"><dt>Daily rent / CUSA</dt><dd>PHP {{ $assessment->daily_rental }} / {{ $assessment->daily_cusa }}</dd></div>
+                         <div class="detailrow"><dt>Billing days</dt><dd>{{ $assessment->billing_days }}</dd></div>
+                         <div class="detailrow"><dt>Monthly rent / CUSA</dt><dd>PHP {{ $assessment->monthly_rental }} / {{ $assessment->monthly_cusa }}</dd></div>
+                         <div class="detailrow"><dt>Monthly total for reference month</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}</dd></div>
+                         <div class="detailrow"><dt>Two months’ advance / security deposit</dt><dd>PHP {{ $assessment->advance_rental }} / {{ $assessment->security_deposit }}</dd></div>
+                     </dl>
++                    </details>
+                 @elseif($agreement)
+                     <p class="text-sm text-slate-600 mt-2">Legacy monthly snapshot · PHP {{ $agreement->monthly_amount }}</p>
+                 @else
+                     <p class="text-sm text-slate-600 mt-2">No rental agreement recorded.</p>
+                 @endif
+             </article>
+         @empty <p class="text-sm text-slate-600 mt-4">No rental agreements recorded.</p> @endforelse
+         <div class="flex flex-wrap gap-3 mt-4"><a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$record->id]) }}">Billing history</a><a class="btn secondary" href="{{ route('receivables',['tenant_id'=>$record->id]) }}">Receivables</a></div>
+         <div class="mt-4">{{ $profileAssignments->links() }}</div>
+     </section>
+--- before/routes/rental-overrides.php
++++ after/routes/rental-overrides.php
+@@ -0,0 +1,21 @@
++<?php
++
++use App\Http\Controllers\RentalOverrideController;
++use App\Http\Middleware\ActiveAccount;
++use Illuminate\Support\Facades\Route;
++
++Route::middleware(['auth', ActiveAccount::class])
++    ->prefix('tenants/{tenant}/assignments/{assignment}/rental-overrides')
++    ->name('rental-overrides.')
++    ->group(function () {
++        Route::get('/', [RentalOverrideController::class, 'index'])->name('index');
++        Route::get('create', [RentalOverrideController::class, 'create'])->name('create');
++        Route::post('/', [RentalOverrideController::class, 'store'])->name('store');
++        Route::post('preview', [RentalOverrideController::class, 'preview'])->name('preview');
++        Route::get('{override}/edit', [RentalOverrideController::class, 'edit'])->name('edit');
++        Route::put('{override}', [RentalOverrideController::class, 'update'])->name('update');
++        Route::post('{override}/submit', [RentalOverrideController::class, 'submit'])->name('submit');
++        Route::post('{override}/approve', [RentalOverrideController::class, 'approve'])->name('approve');
++        Route::post('{override}/reject', [RentalOverrideController::class, 'reject'])->name('reject');
++        Route::post('{override}/revoke', [RentalOverrideController::class, 'revoke'])->name('revoke');
++    });
+--- before/routes/web.php
++++ after/routes/web.php
+@@ -6,20 +6,21 @@
+     RecordController,
+     MapController,
+     AssignmentController,
+     BillingController,
+     PaymentController,
+     ReportController,
+     AdminController,
+ };
+ require __DIR__.'/business-categories.php';
+ require __DIR__.'/tenant-businesses.php';
++require __DIR__.'/rental-overrides.php';
+ 
+ Route::get("/", function () {
+     return redirect()->route("dashboard");
+ });
+ Route::middleware("guest")->group(function () {
+     Route::get("/login", [AuthController::class, "form"])->name("login");
+     Route::post("/login", [AuthController::class, "login"])->middleware("throttle:20,1");
+ });
+ Route::middleware(["auth", \App\Http\Middleware\ActiveAccount::class])->group(function () {
+     Route::post("/logout", [AuthController::class, "logout"])->name("logout");
+--- before/scripts/build-assets.js
++++ after/scripts/build-assets.js
+@@ -1,5 +1,6 @@
+ const fs = require('fs');
+ for (const [source, target] of [['node_modules/chart.js/dist/chart.umd.js','chart.js'],['node_modules/sweetalert2/dist/sweetalert2.all.min.js','sweetalert2.js']]) fs.copyFileSync(source, 'public/assets/'+target);
+ fs.copyFileSync('resources/js/app.js','public/assets/app.js');
+ 
+ fs.copyFileSync('resources/js/tenant-registration.js','public/assets/tenant-registration.js');
++fs.copyFileSync('resources/js/rental-overrides.js','public/assets/rental-overrides.js');
+--- before/tests/Feature/RentalOverrideWorkflowTest.php
++++ after/tests/Feature/RentalOverrideWorkflowTest.php
+@@ -0,0 +1,298 @@
++<?php
++
++namespace Tests\Feature;
++
++use App\Models\{Market, MarketSection, RentalOverride, RentalPolicy, Stall, Tenant, User};
++use App\Services\{AssignmentService, RentalOverrideService};
++use Carbon\Carbon;
++use Database\Seeders\RoleSeeder;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Str;
++use Tests\Fixtures\ApprovedRentalConfiguration;
++use Tests\TestCase;
++
++class RentalOverrideWorkflowTest extends TestCase
++{
++    use ApprovedRentalConfiguration, RefreshDatabase;
++
++    private $requester;
++    private $reviewer;
++    private $tenant;
++    private $stall;
++    private $section;
++    private $assignment;
++    private $url;
++
++    protected function setUp(): void
++    {
++        parent::setUp();
++        Carbon::setTestNow('2030-01-01');
++        $this->seed(RoleSeeder::class);
++        $this->requester = $this->user('Requester', 'Market Staff');
++        $this->reviewer = $this->user('Reviewer', 'Super Administrator');
++        $this->actingAs($this->requester);
++        $this->tenant = Tenant::create(['name'=>'Synthetic tenant', 'reference'=>'T1', 'status'=>'active']);
++        $market = Market::create(['name'=>'Fictional market', 'code'=>'M1', 'status'=>'active']);
++        $this->section = MarketSection::create(['market_id'=>$market->id, 'code'=>'S1', 'name'=>'Original section', 'status'=>'active']);
++        $this->stall = Stall::create(['market_id'=>$market->id, 'market_section_id'=>$this->section->id,
++            'code'=>'A1', 'classification'=>'standard', 'location_type'=>'outer', 'area'=>'10.00', 'status'=>'vacant']);
++        $business = $this->businessWithApprovedRental($this->reviewer, $this->tenant, $market->id);
++        $this->assignment = app(AssignmentService::class)->assign($this->reviewer, [
++            'tenant_id'=>$this->tenant->id, 'stall_id'=>$this->stall->id, 'business_id'=>$business->id,
++            'start_date'=>'2029-12-01', 'agreement_reference'=>'REF-TEST',
++        ]);
++        $this->url = "/tenants/{$this->tenant->id}/assignments/{$this->assignment->id}/rental-overrides";
++    }
++
++    protected function tearDown(): void
++    {
++        Carbon::setTestNow();
++        parent::tearDown();
++    }
++
++    public function test_preview_and_direct_actions_are_scoped_and_permission_gated(): void
++    {
++        $data = $this->terms() + ['period'=>'2030-02', 'proposed_daily_rental'=>'3.00'];
++        $this->postJson($this->url.'/preview', $data)->assertOk()->assertJsonPath('computation_mode', 'proposed')
++            ->assertJsonPath('daily_rental', '225.00')->assertJsonPath('automatic_daily_rental', '250.00')
++            ->assertJsonPath('rental_override_id', null);
++        $this->postJson($this->url.'/preview', $data + ['override_daily_amount'=>'150'])
++            ->assertStatus(422)->assertJsonValidationErrors('override_type');
++        $this->postJson($this->url.'/preview', $data + ['stall_id'=>999])->assertStatus(422)->assertJsonValidationErrors('stall_id');
++        $this->assertDatabaseCount('rental_overrides', 0);
++        $other = Tenant::create(['name'=>'Wrong tenant', 'reference'=>'T2', 'status'=>'active']);
++        $foreignUrl = "/tenants/{$other->id}/assignments/{$this->assignment->id}/rental-overrides";
++        $this->postJson($foreignUrl.'/preview', $data)->assertNotFound();
++        $this->postJson($foreignUrl, $data)->assertNotFound();
++        $this->get($foreignUrl)->assertNotFound();
++        $pending = $this->pending();
++        $second = $this->assignment->replicate();
++        $second->active_stall_id = null;
++        $second->status = 'ended';
++        $second->save();
++        $wrongAssignment = "/tenants/{$this->tenant->id}/assignments/{$second->id}/rental-overrides/{$pending->id}";
++        $this->actingAs($this->reviewer)->postJson($wrongAssignment.'/approve', ['fingerprint'=>str_repeat('a', 64)])->assertNotFound();
++        $viewer = $this->user('Treasurer', 'Treasury/Accounting Officer');
++        $this->actingAs($viewer)->get($this->url)->assertOk()->assertSee($pending->reason)->assertDontSee('Approve request');
++        $this->postJson($this->url.'/preview', $data)->assertForbidden();
++        $this->postJson($this->url, $data)->assertForbidden();
++        foreach (['submit', 'approve', 'reject', 'revoke'] as $action) {
++            $this->postJson($this->url.'/'.$pending->id.'/'.$action)->assertForbidden();
++        }
++    }
++
++    public function test_store_submit_intent_is_atomic_and_exact_replay_is_idempotent(): void
++    {
++        $terms = $this->terms(['intent'=>'submit', 'period'=>'2030-02']);
++        $this->get($this->url.'/create?period=2030-02')->assertOk()->assertSee('Preview proposed rent')
++            ->assertSee('name="intent" value="submit"', false);
++        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
++        $pending = RentalOverride::sole();
++        $this->assertSame('pending', $pending->status);
++        $this->post($this->url, $terms)->assertRedirect($this->url.'?period=2030-02');
++        $this->postJson($this->url, array_replace($terms, ['reason'=>'Changed replay']))->assertStatus(422)->assertJsonValidationErrors('submission_key');
++        $this->assertDatabaseCount('rental_overrides', 1);
++    }
++
++    public function test_finite_assignment_form_keeps_reference_month_and_offers_only_full_months(): void
++    {
++        $this->assignment->update(['end_date'=>'2030-04-10']);
++        $this->get($this->url.'/create?period=2030-02')->assertOk()
++            ->assertSee('name="period" value="2030-02"', false)
++            ->assertSee('type="date" value="2030-02-01"', false)
++            ->assertSee('type="date" value="2030-03-31"', false);
++        $this->assignment->update(['end_date'=>'2030-01-25']);
++        $this->get($this->url.'/create?period=2030-02')
++            ->assertRedirect($this->url.'?period=2030-02')->assertSessionHasErrors('assignment');
++    }
++
++    public function test_rental_mode_selection_opens_request_or_prospective_return_workflow(): void
++    {
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
++        $create = $this->url.'/create?period=2030-02&computation_mode=';
++        $this->get($profile)->assertOk()->assertSee('name="computation_mode"', false)
++            ->assertSee('Automatic (default)')->assertSee('Manual override');
++        $this->get($create.'automatic')->assertRedirect($profile);
++        $this->get($create.'manual_override')->assertOk()->assertSee('Override method (required)');
++        $this->assertDatabaseCount('rental_overrides', 0);
++
++        $pending = $this->pending();
++        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        $this->actingAs($this->reviewer)->get($create.'automatic')->assertRedirect($this->url.'?period=2030-02');
++        $this->get($this->url.'?period=2030-02')->assertOk()->assertSee('Return to automatic');
++        $this->assertSame('approved', $pending->fresh()->status);
++    }
++
++    public function test_draft_edit_and_submit_bind_displayed_terms(): void
++    {
++        $terms = $this->terms();
++        $this->post($this->url, $terms + ['intent'=>'save'])->assertRedirect();
++        $draft = RentalOverride::sole();
++        $url = $this->url.'/'.$draft->id;
++        $stale = RentalOverrideService::fingerprint($draft);
++        $this->get($url.'/edit')->assertOk()->assertSee($stale);
++        $this->putJson($url, array_replace($terms, ['reason'=>'Revised pending request']))
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->put($url, array_replace($terms, ['reason'=>'Revised pending request', 'draft_fingerprint'=>$stale]))->assertRedirect();
++        $this->putJson($url, array_replace($terms, ['reason'=>'Stale browser edit', 'draft_fingerprint'=>$stale]))
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->assertSame('Revised pending request', $draft->fresh()->reason);
++        $this->postJson($url.'/submit', ['draft_fingerprint'=>$stale])->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->assertSame('draft', $draft->fresh()->status);
++        $fresh = RentalOverrideService::fingerprint($draft->fresh());
++        $this->post($url.'/submit', ['draft_fingerprint'=>$fresh])->assertRedirect();
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'DRIFTED TEST AUTHORITY']);
++        $this->post($url.'/submit', ['draft_fingerprint'=>$fresh])->assertRedirect();
++        $this->assertSame('pending', $draft->fresh()->status);
++    }
++
++    public function test_approval_binds_policy_and_rejection_revision_and_revocation_retain_history(): void
++    {
++        $pending = $this->pending();
++        $this->requester->givePermissionTo('rentals.override.approve');
++        $url = $this->url.'/'.$pending->id;
++        $review = RentalOverrideService::review($pending);
++        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('approved_by');
++        $this->actingAs($this->reviewer)->get($this->url.'?period=2030-02')
++            ->assertOk()->assertSee($review['fingerprint'])->assertSee($review['policy']['reference_document'])
++            ->assertSee('Proposed daily rent')->assertSee('Pending');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'CHANGED-TEST-AUTHORITY']);
++        $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('fingerprint');
++        $this->post($url.'/reject', ['reason'=>'Required revision'])->assertRedirect();
++        $this->actingAs($this->requester)->get($this->url.'/create?source_override_id='.$pending->id)->assertOk()
++            ->assertSee('name="source_override_id" value="'.$pending->id.'"', false);
++        $this->post($this->url, $this->terms(['source_override_id'=>$pending->id, 'intent'=>'submit']))->assertRedirect();
++        $new = RentalOverride::where('source_override_id', $pending->id)->sole();
++        $this->actingAs($this->reviewer);
++        $newUrl = $this->url.'/'.$new->id;
++        $fp = RentalOverrideService::review($new)['fingerprint'];
++        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
++        $this->post($newUrl.'/approve', ['fingerprint'=>$fp])->assertRedirect();
++        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
++        $this->post($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Return decision'])->assertRedirect();
++        $this->postJson($newUrl.'/revoke', ['revocation_effective_from'=>'2030-03-01', 'reason'=>'Conflicting return'])
++            ->assertStatus(422)->assertJsonValidationErrors('status');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'LATER-TEST-AUTHORITY']);
++        $this->get($this->url.'?period=2030-03')->assertOk()->assertSee('Required revision')->assertSee('Return decision')
++            ->assertSee('CHANGED-TEST-AUTHORITY')->assertDontSee('LATER-TEST-AUTHORITY')->assertSee('Revoked');
++    }
++
++    public function test_map_and_tenant_show_reference_month_and_mask_override_information(): void
++    {
++        $pending = $this->pending();
++        app(RentalOverrideService::class)->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental';
++        $map = '/map/stalls/'.$this->stall->id;
++        $this->section->update(['name'=>'Renamed section']);
++        $this->get($profile)->assertOk()->assertSee('Applicable daily rent')->assertSee('250.00')->assertDontSee('Approved override applies');
++        $this->get($profile.'&period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('225.00');
++        $this->get($map.'?period=2030-02')->assertOk()->assertSee('Approved override applies')->assertSee('Renamed section')
++            ->assertSee('Original section')->assertSee('225.00');
++        $this->get('/map?period=2030-02&computation_mode=manual_override')->assertOk()->assertSee('?period=2030-02');
++        $this->get('/map?period=2030-02&computation_mode=automatic')->assertOk()->assertDontSee('?period=2030-02');
++        $viewer = $this->user('Viewer', 'LGU Management Viewer');
++        $this->actingAs($viewer)->get($map)->assertOk()->assertSee('Renamed section')
++            ->assertDontSee('Approved override')->assertDontSee('225.00')->assertDontSee('250.00')->assertDontSee($pending->reason);
++        $this->get('/reports/rental-overrides')->assertForbidden();
++        $this->get('/map?computation_mode=manual_override')->assertForbidden();
++        $this->assignment->update(['status'=>'ended', 'end_date'=>'2030-02-28']);
++        $this->actingAs($this->requester)->get($profile.'&period=2030-04')->assertOk()->assertSee('Initial assessment')
++            ->assertSee('Override history')->assertDontSee('Request manual override');
++        $this->get($this->url.'?period=2030-04')->assertOk()->assertSee($pending->reason)->assertSee('Expired');
++    }
++
++    public function test_report_filters_are_shared_by_screen_and_export(): void
++    {
++        $approved = $this->pending(['reason'=>'Approved fixture', 'effective_until'=>'2030-02-28']);
++        app(RentalOverrideService::class)->approve($this->reviewer, $approved, RentalOverrideService::fingerprint($approved));
++        $this->pending(['reason'=>'=Pending fixture', 'effective_from'=>'2030-03-01']);
++        $this->actingAs($this->reviewer);
++        $url = '/reports/rental-overrides?status=pending&as_of=2030-03-01&section_id='.$this->section->id;
++        $this->get($url)->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
++        $this->get($url.'&format=print')->assertOk()->assertSee('=Pending fixture')->assertDontSee('Approved fixture');
++        $csv = $this->get($url.'&format=csv')->assertOk()->streamedContent();
++        $this->assertStringContainsString("'=Pending fixture", $csv);
++        $this->assertStringNotContainsString('Approved fixture', $csv);
++        $xlsx = $this->get($url.'&format=xlsx')->assertOk()->streamedContent();
++        $file = tempnam(sys_get_temp_dir(), 'override-report');
++        try {
++            file_put_contents($file, $xlsx);
++            $book = (new \PhpOffice\PhpSpreadsheet\Reader\Xlsx())->load($file);
++            $cells = json_encode($book->getActiveSheet()->toArray());
++            $this->assertStringContainsString('=Pending fixture', $cells);
++            $this->assertStringNotContainsString('Approved fixture', $cells);
++            $book->disconnectWorksheets();
++        } finally {
++            unlink($file);
++        }
++        $pdfReasons = null;
++        \Illuminate\Support\Facades\View::composer('reports.print', function ($view) use (&$pdfReasons) {
++            $pdfReasons = $view->getData()['rows']->pluck('reason')->all();
++        });
++        $pdf = $this->get($url.'&format=pdf')->assertOk()->assertHeader('Content-Type', 'application/pdf');
++        $this->assertStringStartsWith('%PDF', $pdf->getContent());
++        $this->assertSame(['=Pending fixture'], $pdfReasons);
++        $this->get('/reports/rental-overrides?status=expired&as_of=2030-03-01')
++            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture');
++        $this->get('/reports/rental-overrides?computation_mode=manual_override&as_of=2030-02-15')
++            ->assertOk()->assertSee('Approved fixture')->assertDontSee('=Pending fixture')
++            ->assertViewHas('rows', function ($rows) {
++                $row = $rows->first();
++                return $rows->total() === 1 && $row->computation_mode === 'manual_override' &&
++                    $row->applicable_daily_rent == 225.00 && $row->applicable_daily_difference == -25.00;
++            });
++        $this->get('/reports/rental-assessments?computation_mode=manual_override')
++            ->assertOk()->assertSee('No matching records.');
++        $this->get('/reports/stall-master')->assertOk()->assertDontSee('name="computation_mode"', false);
++    }
++
++    public function test_pending_profile_state_and_assessment_mode_respect_override_visibility(): void
++    {
++        $pending = $this->pending(['effective_until'=>'2030-02-28']);
++        $profile = '/manage/tenants/'.$this->tenant->id.'?tab=rental&period=2030-02';
++        $this->get($profile)->assertOk()->assertSee('1 pending request')->assertDontSee('Approved override applies');
++
++        $service = app(RentalOverrideService::class);
++        $service->approve($this->reviewer, $pending, RentalOverrideService::fingerprint($pending));
++        Carbon::setTestNow('2030-02-01');
++        app(\App\Services\RentalCalculationService::class)->assess($this->reviewer, $this->assignment, '2030-02', 'billing');
++        Carbon::setTestNow('2030-04-01');
++        $report = '/reports/rental-assessments?as_of=2030-04-01';
++        $this->actingAs($this->reviewer)->get($report.'&computation_mode=manual_override')->assertOk()
++            ->assertViewHas('rows', fn ($rows) => $rows->total() === 1 && $rows->first()->period === '2030-02' &&
++                $rows->first()->computation_mode === 'manual_override');
++        $this->actingAs($this->user('Collector', 'Authorized Collection Officer'))->get($report)->assertOk()
++            ->assertDontSee('name="computation_mode"', false)->assertDontSee('manual_override')->assertSee('225');
++        $this->get($report.'&computation_mode=manual_override')->assertForbidden();
++    }
++
++    public function test_report_forms_render_only_supported_scope_and_date_filters(): void
++    {
++        $this->actingAs($this->reviewer)->get('/reports/stall-master')->assertOk()
++            ->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
++            ->assertDontSee('name="tenant_id"', false)->assertDontSee('name="recorded_by"', false);
++        $this->get('/reports/audit-trail')->assertOk()
++            ->assertSee('name="from"', false)->assertDontSee('name="stall_id"', false);
++        $this->get('/reports/rental-overrides')->assertOk()
++            ->assertSee('name="as_of"', false)->assertSee('name="section_id"', false)->assertDontSee('name="from"', false)
++            ->assertDontSee('name="recorded_by"', false);
++    }
++
++    private function user(string $name, string $role): User
++    {
++        $user = User::create(['name'=>$name, 'email'=>strtolower($name).'@example.test', 'password'=>'unused', 'active'=>true]);
++        return $user->assignRole($role);
++    }
++
++    private function terms(array $changes = []): array
++    {
++        return array_replace(['submission_key'=>(string) Str::uuid(), 'override_type'=>'rate_per_sqm',
++            'override_rate_per_sqm'=>'22.50', 'effective_from'=>'2030-02-01', 'reason'=>'Synthetic override reason'], $changes);
++    }
++
++    private function pending(array $changes = []): RentalOverride
++    {
++        $service = app(RentalOverrideService::class);
++        return $service->submit($this->requester, $service->saveDraft($this->requester, $this->assignment, $this->terms($changes)));
++    }
++}
+--- before/tests/Feature/UnifiedIntegrationTest.php
++++ after/tests/Feature/UnifiedIntegrationTest.php
+@@ -77,21 +77,22 @@
+         $this->assertNull($stall->fresh()->location_type);
+     }
+ 
+     public function test_unified_reports_are_registered_with_explicit_privacy_permissions()
+     {
+         $types = \App\Services\Reports::TYPES;
+         $this->assertArrayHasKey('business-categories',$types);
+         $this->assertSame('rates.view',$types['business-categories'][1]);
+         $this->assertSame('reports.financial',$types['rental-assessments'][1]);
+         $this->assertSame('contracts.view',$types['lease-contract-registry'][1]);
+-        $this->assertCount(19,$types);
++        $this->assertSame('rentals.override.report',$types['rental-overrides'][1]);
++        $this->assertCount(20,$types);
+     }
+ 
+     public function test_map_location_filters_and_authorized_business_details_preserve_viewer_privacy()
+     {
+         list($user,$market,$section) = $this->fixtures();
+         $stall = Stall::create($this->stallData($market,$section)+['location_type'=>'outer']);
+         $stall->update(['status'=>'occupied']);
+         $tenant = Tenant::create(['reference'=>'SYN-T','name'=>'Confidential Synthetic Stallholder','status'=>'active']);
+         $category = \App\Models\BusinessCategory::create(['code'=>'SYN-FRUIT','name'=>'Synthetic Fruits','is_active'=>true]);
+         $business = \App\Models\Business::create(['tenant_id'=>$tenant->id,'business_category_id'=>$category->id,'name'=>'Synthetic Fruit Shop','status'=>'active']);

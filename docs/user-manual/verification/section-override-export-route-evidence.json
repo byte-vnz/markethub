@@ -1,0 +1,37 @@
+{
+    "\/help\/download\/manual-pdf": {
+        "guest": 302,
+        "authenticated": 200,
+        "mime": "application\/pdf",
+        "bytes": 21834097,
+        "sha256": "ddba8e3ecc28c9555bd4a625535fd4de7d4ce3e676960c6ae66eeac4df9c1c10"
+    },
+    "\/help\/download\/manual-docx": {
+        "guest": 302,
+        "authenticated": 200,
+        "mime": "application\/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "bytes": 16219220,
+        "sha256": "76f92b1165c8088685a713242b6d89694db074860f3ed53487570a680fec2656"
+    },
+    "\/help\/download\/quick-reference-pdf": {
+        "guest": 302,
+        "authenticated": 200,
+        "mime": "application\/pdf",
+        "bytes": 90495,
+        "sha256": "0f69e1523c4d3f390b9ae2f7c98555e62d91275dedeb938e2b4d74de74a435a2"
+    },
+    "\/reports\/rental-overrides?as_of=2026-12-01&format=pdf": {
+        "guest": 302,
+        "authenticated": 200,
+        "mime": "application\/pdf",
+        "bytes": 24057,
+        "sha256": "3081bc5590647761be0707413a1a1893ec626c31cdc413027799b1676e834973"
+    },
+    "\/reports\/rental-overrides?as_of=2026-12-01&format=print": {
+        "guest": 302,
+        "authenticated": 200,
+        "mime": "text\/html",
+        "bytes": 5078,
+        "sha256": "949a8aba15e1366363d4a10f87d4da2a4f0a4ca7f2b771db737da0e9163a50ea"
+    }
+}

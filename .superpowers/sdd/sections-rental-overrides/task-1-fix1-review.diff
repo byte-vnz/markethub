@@ -1,0 +1,403 @@
+Changed files (8):
+app/Http/Controllers/MapController.php
+app/Http/Controllers/RecordController.php
+app/Services/SectionService.php
+resources/views/map/details.blade.php
+resources/views/map/index.blade.php
+resources/views/sections/index.blade.php
+resources/views/stalls/index.blade.php
+tests/Feature/SectionManagementTest.php
+
+File comparison review package (no Git repository). Base: .qa\sections-overrides-checkpoint\after-task-1.zip
+--- before/app/Http/Controllers/MapController.php
++++ after/app/Http/Controllers/MapController.php
+@@ -23,23 +23,23 @@
+         $markets = Market::orderBy("name")->get();
+         $market = $markets->firstWhere("id", (int) $request->market_id) ?: $markets->first();
+         $stalls = collect();
+         $sections = collect();
+         $sectionStalls = collect();
+         $selectedSection = null;
+         $layout = null;
+         if ($market) {
+             $sections = $market->sections()->inDisplayOrder()->get();
+             $q = $market->stalls()->with("position", "section");
+-            if ($request->filled("section_id")) {
+-                $selectedSection = $sections->firstWhere('id', (int) $request->section_id);
+-                $q->where("market_section_id", $request->section_id);
++            $selectedSection = $sections->firstWhere('id', (int) $request->input('section_id'));
++            if ($selectedSection) {
++                $q->where('market_section_id', $selectedSection->id);
+             }
+             if ($request->filled("status")) {
+                 $q->where("status", $request->status);
+             }
+             if ($request->input('location_type') === 'unclassified') {
+                 $q->whereNull('location_type');
+             } elseif ($request->filled('location_type')) {
+                 $q->where('location_type',$request->input('location_type'));
+             }
+             if ($request->filled('business_category_id')) {
+--- before/app/Http/Controllers/RecordController.php
++++ after/app/Http/Controllers/RecordController.php
+@@ -26,29 +26,34 @@
+         if ($type === 'businesses') {
+             $this->authorize('tenants.view');
+             return redirect()->route('tenant-businesses.index', $request->only('q','status','tenant_id'));
+         }
+         $spec = Resources::get($type);
+         $this->authorize($spec["permission"] . ".view");
+         if ($type === 'sections') {
+             return $this->sections($request);
+         }
+         $q = $spec["model"]::query();
++        $stallSections = collect();
+         if ($type === 'stalls') {
+             if ($request->filled('business_category_id')) {
+                 $this->authorize('tenants.view');
+             }
+             $request->validate(['q'=>'nullable|string|max:100','location_type'=>'nullable|in:inner,outer,unclassified','business_category_id'=>'nullable|integer|exists:business_categories,id',
+                 'market_id'=>'nullable|integer|exists:markets,id', 'section_id'=>'nullable|integer|exists:market_sections,id']);
+             $q->with(['market','section','category','currentAssignment.tenant','currentAssignment.business.businessCategory','currentAssignment.agreement.assessment']);
+-            if ($request->filled('section_id')) {
+-                $q->where('market_section_id', $request->input('section_id'));
++            $stallSections = MarketSection::with('market')->inDisplayOrder()->when($request->filled('market_id'), function ($sections) use ($request) {
++                $sections->where('market_id', $request->input('market_id'));
++            })->get();
++            $selectedSection = $stallSections->firstWhere('id', (int) $request->input('section_id'));
++            if ($selectedSection) {
++                $q->where('market_section_id', $selectedSection->id);
+             }
+             if ($request->input('location_type') === 'unclassified') {
+                 $q->whereNull('location_type');
+             } elseif ($request->filled('location_type')) {
+                 $q->where('location_type',$request->input('location_type'));
+             }
+             if ($request->filled('business_category_id')) {
+                 $q->whereHas('currentAssignment.business',function ($q) use ($request) { $q->where('business_category_id',$request->input('business_category_id')); });
+             }
+         }
+@@ -60,24 +65,21 @@
+         }
+         if ($request->filled("status") && isset($spec["fields"]["status"])) {
+             $q->where("status", $request->status);
+         }
+         return view($type === 'stalls' ? 'stalls.index' : 'records.index', [
+             "spec" => $spec,
+             "type" => $type,
+             "records" => $q->orderByDesc("id")->paginate(20)->withQueryString(),
+             "businessCategories" => $type === 'stalls' && $request->user()->can('tenants.view') ? \App\Models\BusinessCategory::orderBy('name')->get() : collect(),
+             'stallMarkets' => $type === 'stalls' ? Market::orderBy('name')->get() : collect(),
+-            'stallSections' => $type === 'stalls' ? MarketSection::with('market')->inDisplayOrder()
+-                ->when($request->filled('market_id'), function ($sections) use ($request) {
+-                    $sections->where('market_id', $request->input('market_id'));
+-                })->get() : collect(),
++            'stallSections' => $stallSections,
+         ]);
+     }
+ 
+     private function sections(Request $request)
+     {
+         $filters = $request->validate([
+             'q' => 'nullable|string|max:100', 'status' => 'nullable|in:active,inactive',
+             'market_id' => 'nullable|integer|exists:markets,id',
+         ]);
+         $query = MarketSection::with('market')->withStallCounts()->orderBy('market_id')->inDisplayOrder();
+@@ -90,29 +92,29 @@
+         if ($request->filled('q')) {
+             $query->where(function ($sections) use ($filters) {
+                 $match = '%'.$filters['q'].'%';
+                 $sections->where('name', 'like', $match)->orWhere('code', 'like', $match);
+             });
+         }
+         $records = $query->paginate(20)->withQueryString();
+         $markets = Market::orderBy('name')->get();
+         $orderable = collect();
+         if (!empty($filters['market_id']) && !$request->anyFilled(['q', 'status']) && $request->user()->can('sections.manage')) {
+-            $orderable = MarketSection::where('market_id', $filters['market_id'])->inDisplayOrder()->limit(2001)->get();
++            $orderable = MarketSection::where('market_id', $filters['market_id'])->inDisplayOrder()->limit(SectionService::MAX_REORDER_SECTIONS + 1)->get();
+         }
+         return view('sections.index', compact('records', 'markets', 'filters', 'orderable'));
+     }
+ 
+     public function reorderSections(Request $request, SectionService $service)
+     {
+         $this->authorize('sections.manage');
+-        $data = $request->validate(['market_id' => 'required|integer', 'ids' => 'required|array|max:2000']);
++        $data = $request->validate(['market_id' => 'required|integer', 'ids' => 'required|array|max:'.SectionService::MAX_REORDER_SECTIONS]);
+         $service->reorder($request->user(), $data['market_id'], $data['ids']);
+         return redirect()->route('records.index', ['type' => 'sections', 'market_id' => $data['market_id']])
+             ->with('success', 'Section order saved.');
+     }
+ 
+     public function stallSectionOptions(Market $market)
+     {
+         $this->authorize('stalls.manage');
+         return response()->json($market->sections()->where('status', 'active')->inDisplayOrder()->get(['id', 'name', 'code']))
+             ->header('Cache-Control', 'private, no-store');
+--- before/app/Services/SectionService.php
++++ after/app/Services/SectionService.php
+@@ -2,20 +2,22 @@
+ 
+ namespace App\Services;
+ 
+ use App\Models\{Market, MarketSection, User};
+ use Illuminate\Auth\Access\AuthorizationException;
+ use Illuminate\Support\Facades\{DB, Validator};
+ use Illuminate\Validation\ValidationException;
+ 
+ class SectionService
+ {
++    public const MAX_REORDER_SECTIONS = 500;
++
+     public static function rules(): array
+     {
+         return [
+             'market_id' => 'required|integer|exists:markets,id',
+             'code' => 'required|string|max:40',
+             'name' => 'required|string|max:255',
+             'description' => 'nullable|string|max:2000',
+             'color' => ['nullable', 'string', 'regex:/\A#[0-9a-fA-F]{6}\z/'],
+             'sort_order' => 'sometimes|required|integer|min:0|max:999999',
+             'status' => 'required|in:active,inactive',
+@@ -54,46 +56,48 @@
+             $others = MarketSection::where('market_id', $data['market_id']);
+             if ($section->exists) {
+                 $others->where('id', '!=', $section->id);
+                 if ($data['code'] === trim($section->code)) {
+                     $data['code'] = $section->code;
+                 }
+             }
+             if ((clone $others)->where('code', $data['code'])->lockForUpdate()->first(['id'])) {
+                 throw ValidationException::withMessages(['code' => 'This code is already used in the selected market.']);
+             }
+-            // Preserve original spelling, including whitespace trimmed during HTTP input processing.
+-            if (!$moving && $section->exists && $data['name'] === trim($section->name)) {
+-                $data['name'] = $section->name;
+-            } elseif ($others->lockForUpdate()->pluck('name')->contains(function ($name) use ($normalizedName) {
++            $unchangedName = $section->exists && $data['name'] === trim($section->name);
++            if (($moving || !$unchangedName) && $others->lockForUpdate()->pluck('name')->contains(function ($name) use ($normalizedName) {
+                 return self::normalizedName($name) === $normalizedName;
+             })) {
+                 throw ValidationException::withMessages(['name' => 'This section name is already used in the selected market.']);
++            }
++            // Preserve original spelling, including whitespace trimmed during HTTP input processing.
++            if ($unchangedName) {
++                $data['name'] = $section->name;
+             }
+             $before = $section->getAttributes();
+             $section->fill($data);
+             if (!$section->exists) {
+                 $section->created_by = $actor->id;
+             }
+             $section->updated_by = $actor->id;
+             $section->save();
+             Audit::record($actor, $id === null ? 'sections.created' : 'sections.updated', $section, $before, $section->getAttributes());
+             return $section;
+         }, 3);
+     }
+ 
+     public function reorder(User $actor, $marketId, array $ids): void
+     {
+         $this->authorize($actor);
+         Validator::make(['market_id' => $marketId, 'ids' => $ids], [
+             'market_id' => 'required|integer|exists:markets,id',
+-            'ids' => 'required|array|min:1|max:2000',
++            'ids' => 'required|array|min:1|max:'.self::MAX_REORDER_SECTIONS,
+             'ids.*' => 'required|integer|distinct|min:1',
+         ])->validate();
+ 
+         DB::transaction(function () use ($actor, $marketId, $ids) {
+             $market = Market::lockForUpdate()->findOrFail($marketId);
+             $sections = $market->sections()->lockForUpdate()->get()->keyBy('id');
+             if ($sections->count() !== count($ids) || $sections->keys()->diff($ids)->isNotEmpty()) {
+                 throw ValidationException::withMessages(['ids' => 'Submit every section in this market exactly once. Reload the order if sections changed.']);
+             }
+             foreach (array_values($ids) as $index => $id) {
+--- before/resources/views/map/details.blade.php
++++ after/resources/views/map/details.blade.php
+@@ -1,4 +1,4 @@
+-<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>@include('sections.swatch',['section'=>$stall->section]) {{ optional($stall->section)->name ?: 'Unknown section' }}@if(optional($stall->section)->status === 'inactive') (Inactive)@endif</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)<div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Agreed daily rate / rental</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Reference monthly rental + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
++<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>@include('sections.swatch',['section'=>$stall->section]) {{ optional($stall->section)->name ?? 'Unknown section' }}@if(optional($stall->section)->status === 'inactive') (Inactive)@endif</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)<div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Agreed daily rate / rental</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Reference monthly rental + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
+ @can('contracts.view')<div class="detailrow"><dt>Lease status</dt><dd>@if($lease)<a class="underline text-blue-800" href="{{ route('contracts.show',$lease) }}">{{ ucfirst($lease->status) }} · {{ $lease->control_number }}</a>@else No lease contract @endif</dd></div>@endcan @can('payments.view')<h3 class="mt-5 mb-2">Latest posted payments</h3>@forelse($payments as $payment)<a class="detailrow text-blue-800" href="{{ route('payments.show',$payment) }}"><span>{{ $payment->payment_date }}</span><strong>PHP {{ number_format((float)$payment->amount,2) }}</strong></a>@empty<p class="text-sm text-slate-600">No posted payments.</p>@endforelse @endcan
+ @can('tenants.view')<details class="mt-5"><summary class="cursor-pointer font-semibold">Assignment history</summary>@forelse($history as $a)<p class="text-sm border-b py-3">{{ $a->tenant->name }}<br>{{ $a->start_date }} – {{ $a->end_date ?: 'Ongoing' }} · {{ $a->status }}</p>@empty<p class="text-sm py-3">No assignments recorded.</p>@endforelse</details>@endcan
+ <div class="flex flex-wrap gap-2 mt-5"><a class="btn secondary" href="{{ route('records.show',['stalls',$stall->id]) }}">Full stall record</a>@can('update',$stall)<a class="btn secondary" href="{{ route('records.edit',['stalls',$stall->id]) }}">Edit stall</a>@endcan @can('assignments.manage')@if(!$assignment && in_array($stall->status,['vacant','reserved'],true) && optional($stall->section)->status === 'active' && optional($stall->section)->market_id === $stall->market_id && $stall->market->status === 'active')<a class="btn" href="{{ route('assignments.create',['stall_id'=>$stall->id]) }}">Assign tenant</a>@elseif($assignment)<a class="btn secondary" href="{{ route('assignments.transfer-form',$assignment) }}">Transfer / renew</a><a class="btn secondary" href="{{ route('assignments.index',['stall_id'=>$stall->id]) }}">End assignment</a>@endif @endcan @if($assignment)<a class="btn secondary" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">Tenant record</a>@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$assignment->tenant_id]) }}">Billing history</a>@endcan @can('payments.record')<a class="btn" href="{{ route('payments.create',['tenant_id'=>$assignment->tenant_id]) }}">Record payment</a>@endcan @endif @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['stall_id'=>$stall->id]) }}">Payment history</a>@endcan</div>
+--- before/resources/views/map/index.blade.php
++++ after/resources/views/map/index.blade.php
+@@ -41,21 +41,21 @@
+     <section class="panel min-w-0">
+         <h2 class="mb-4">{{ $market ? $market->name : 'No market registered' }}</h2>
+         <div class="overflow-x-auto pb-4" role="region" aria-label="Stall layout" tabindex="0">
+             <div class="grid gap-3" style="grid-template-columns:repeat({{ $layout ? $layout->columns : 6 }},minmax(76px,1fr));min-width:{{ ($layout ? $layout->columns : 6)*88 }}px">
+                 @forelse($stalls as $stall)
+                     <button type="button" class="stall status-{{ $stall->status }}" data-stall-url="{{ route('map.details',$stall) }}" aria-pressed="false"
+                             @if($stall->position) style="grid-column:{{ $stall->position->column }} / span {{ $stall->position->width }};grid-row:{{ $stall->position->row }} / span {{ $stall->position->height }}" @endif>
+                         <strong class="block text-sm">{{ $stall->code }}</strong>
+                         <span class="block text-xs mt-2">{{ ucfirst($stall->status) }}</span>
+                         <span class="flex justify-center items-center gap-1 mt-1 text-xs break-all">
+-                            @include('sections.swatch',['section'=>$stall->section]){{ optional($stall->section)->name ?: 'Unknown section' }}
++                            @include('sections.swatch',['section'=>$stall->section]){{ optional($stall->section)->name ?? 'Unknown section' }}
+                         </span>
+                     </button>
+                 @empty
+                     <p class="empty col-span-full">No stalls match this view.</p>
+                 @endforelse
+             </div>
+         </div>
+         <div class="flex flex-wrap gap-2 border-t pt-4" aria-label="Occupancy legend">
+             @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
+                 <span class="badge status-{{ $status }}">{{ ucfirst($status) }}</span>
+--- before/resources/views/sections/index.blade.php
++++ after/resources/views/sections/index.blade.php
+@@ -47,21 +47,22 @@
+                 </tr>
+             @empty
+                 <tr><td colspan="6" class="empty">No sections match these filters.</td></tr>
+             @endforelse
+             </tbody>
+         </table>
+     </div>
+     <div class="mt-5">{{ $records->links() }}</div>
+ </section>
+ @can('sections.manage')
+-    @if(isset($filters['market_id']) && $orderable->count() > 1 && $orderable->count() <= 2000)
++    @php($reorderLimit = \App\Services\SectionService::MAX_REORDER_SECTIONS)
++    @if(isset($filters['market_id']) && $orderable->count() > 1 && $orderable->count() <= $reorderLimit)
+         <details class="panel mt-5" data-section-order hidden @if($errors->has('ids') || $errors->has('ids.*')) open @endif>
+             <summary class="cursor-pointer font-semibold">Reorder sections for {{ $markets->firstWhere('id', (int) $filters['market_id'])->name }}</summary>
+             <form method="post" action="{{ route('sections.order') }}" class="mt-4 max-w-3xl">
+                 @csrf
+                 <input type="hidden" name="market_id" value="{{ $filters['market_id'] }}">
+                 <ol data-section-order-list class="divide-y divide-slate-200">
+                     @foreach($orderable as $section)
+                         <li class="flex flex-wrap items-center justify-between gap-2 py-3">
+                             <input type="hidden" name="ids[]" value="{{ $section->id }}">
+                             <span>{{ $section->name }} · {{ $section->code }}</span>
+@@ -69,15 +70,17 @@
+                                 <button type="button" class="btn secondary" data-order-move="up" aria-label="Move {{ $section->name }} up">Move up</button>
+                                 <button type="button" class="btn secondary" data-order-move="down" aria-label="Move {{ $section->name }} down">Move down</button>
+                             </div>
+                         </li>
+                     @endforeach
+                 </ol>
+                 <p class="text-sm text-slate-600 mt-3" aria-live="polite" data-section-order-status></p>
+                 <button class="btn mt-3">Save order</button>
+             </form>
+         </details>
++    @elseif($orderable->count() > $reorderLimit)
++        <p class="text-sm text-slate-600 mt-4">This market has more than {{ $reorderLimit }} sections. Edit Display order on individual sections.</p>
+     @elseif(empty($filters['market_id']) && $records->isNotEmpty())
+         <p class="text-sm text-slate-600 mt-4">To reorder sections, filter by one market.</p>
+     @endif
+ @endcan
+ @endsection
+--- before/resources/views/stalls/index.blade.php
++++ after/resources/views/stalls/index.blade.php
+@@ -11,18 +11,18 @@
+ <div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>@foreach($stallSections as $section)<option value="{{ $section->id }}" @if(request('section_id')==$section->id)selected @endif>{{ $section->name }} · {{ $section->market->name }}@if($section->status==='inactive') (Inactive)@endif</option>@endforeach</select></div>
+ <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+ @can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan
+ <div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+ <button class="btn secondary">Apply filters</button><a class="text-sm underline py-3" href="{{ route('records.index','stalls') }}">Clear</a>
+ </form>
+ <div class="tablewrap"><table><thead><tr><th>Stall / section</th><th>Area / location</th><th>Occupancy</th>@can('tenants.view')<th>Tenant / business</th>@endcan @can('billing.view')<th>Agreed rental</th>@endcan<th>Actions</th></tr></thead><tbody>
+ @forelse($records as $record)
+ @php($assignment=$record->currentAssignment)
+ @php($assessment=$assignment && $assignment->agreement ? $assignment->agreement->assessment : null)
+-<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?: 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
++<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?? 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
+ @can('tenants.view')<td>@if($assignment)<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}<div class="text-xs text-slate-600">{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</div>@else<span class="text-slate-500">Unassigned</span>@endif</td>@endcan
+ @can('billing.view')<td>@if($assessment)<span>PHP {{ $assessment->rental_rate_sqm }} / sq. m. / day</span><br>PHP {{ $assessment->daily_rental }} daily<div class="text-xs text-slate-600">{{ ucfirst($assessment->location_type) }} assessment · {{ $assessment->period }}</div>@elseif($assignment && $assignment->agreement)<span>PHP {{ $assignment->agreement->monthly_amount }} / month</span><div class="text-xs text-slate-600">Legacy agreement</div>@else<span class="text-slate-500">No assessment</span>@endif</td>@endcan
+ <td><div class="flex flex-wrap gap-3"><a class="text-blue-800 underline" href="{{ route('records.show',['stalls',$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['stalls',$record->id]) }}">Edit</a>@endcan</div></td></tr>
+ @empty<tr><td colspan="6" class="empty">No stalls match these filters.</td></tr>@endforelse
+ </tbody></table></div><div class="mt-5">{{ $records->links() }}</div>
+ </section>
+ @endsection
+--- before/tests/Feature/SectionManagementTest.php
++++ after/tests/Feature/SectionManagementTest.php
+@@ -62,20 +62,85 @@
+         $this->assertSame("  Dry\t Goods ", $legacy->refresh()->name);
+         $this->put('/manage/sections/'.$sibling->id, $this->sectionData($a, 'B', 'Dry Goods'))->assertSessionHasErrors('name');
+         $padded = $this->section($b, ' P ', 'Warehouse');
+         $this->put('/manage/sections/'.$padded->id, $this->sectionData($b, 'P', 'Warehouse'))
+             ->assertRedirect()->assertSessionHasNoErrors();
+         $this->assertSame(' P ', $padded->refresh()->code);
+         $this->post('/manage/sections', $this->sectionData($a, 'C', 'Different') + ['color' => 'red', 'sort_order' => -1])
+             ->assertSessionHasErrors(['color', 'sort_order']);
+         $this->post('/manage/sections/order', ['market_id' => $a->id, 'ids' => [$legacy->id, $b->sections()->value('id')]])
+             ->assertSessionHasErrors('ids');
++    }
++
++    public function test_moving_an_unreferenced_section_checks_destination_and_preserves_its_original_spelling(): void
++    {
++        $this->operator();
++        $first = $this->market('A');
++        $conflicting = $this->market('B');
++        $destination = $this->market('C');
++        $section = $this->section($first, 'A', '  Dry Goods ');
++        $this->section($conflicting, 'B', 'DRY GOODS');
++        $path = '/manage/sections/'.$section->id;
++
++        $this->put($path, $this->sectionData($conflicting, 'A', 'Dry Goods'))->assertSessionHasErrors('name');
++        $this->assertSame($first->id, $section->refresh()->market_id);
++        $this->put($path, $this->sectionData($destination, 'A', 'Dry Goods'))->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame($destination->id, $section->refresh()->market_id);
++        $this->assertSame('  Dry Goods ', $section->name);
++    }
++
++    public function test_bulk_section_reorder_is_limited_to_five_hundred_sections(): void
++    {
++        $this->operator();
++        $market = $this->market('A');
++        foreach (array_chunk(range(1, 500), 100) as $numbers) {
++            DB::table('market_sections')->insert(array_map(function ($number) use ($market) {
++                return $this->sectionData($market, (string) $number, 'Fictional section '.$number);
++            }, $numbers));
++        }
++        $path = '/manage/sections?market_id='.$market->id;
++        $this->get($path)->assertOk()->assertSee('Reorder sections for');
++        $this->section($market, '501', 'Overflow section');
++        $this->get($path)->assertOk()->assertDontSee('Reorder sections for')->assertSee('Display order');
++        $this->post('/manage/sections/order', ['market_id' => $market->id, 'ids' => $market->sections()->pluck('id')->all()])
++            ->assertSessionHasErrors('ids');
++    }
++
++    public function test_foreign_section_id_filter_is_ignored_and_retained_inactive_id_still_filters(): void
++    {
++        $this->operator();
++        $market = $this->market('A');
++        $other = $this->market('B');
++        $active = $this->section($market, 'A', 'Local active section');
++        $inactive = $this->section($market, 'B', 'Retained inactive section', 'inactive');
++        $foreign = $this->section($other, 'A', 'Foreign section');
++        $this->stall($active, 'LOCAL-STALL');
++        $this->stall($inactive, 'RETAINED-STALL');
++        $this->stall($foreign, 'FOREIGN-STALL');
++
++        foreach (['/map', '/manage/stalls'] as $page) {
++            $query = $page.'?market_id='.$market->id.'&section_id=';
++            $this->get($query.$foreign->id)->assertOk()->assertSee('LOCAL-STALL')->assertSee('RETAINED-STALL')->assertDontSee('FOREIGN-STALL');
++            $this->get($query.$inactive->id)->assertOk()->assertSee('RETAINED-STALL')->assertDontSee('LOCAL-STALL');
++        }
++    }
++
++    public function test_map_and_stall_list_render_zero_as_a_section_name(): void
++    {
++        $this->operator();
++        $market = $this->market('A');
++        $section = $this->section($market, 'A', '0');
++        $stall = $this->stall($section, 'ZERO-SECTION-STALL');
++
++        foreach (['/map', '/manage/stalls', '/map/stalls/'.$stall->id] as $page) {
++            $this->get($page)->assertOk()->assertSee($stall->code)->assertDontSee('Unknown section');
++        }
+     }
+ 
+     public function test_stall_options_and_backend_reject_inactive_or_other_market_sections(): void
+     {
+         $this->operator();
+         $a = $this->market('A');
+         $b = $this->market('B');
+         $active = $this->section($a, 'A', 'Fictional local active');
+         $inactive = $this->section($a, 'B', 'Fictional local inactive', 'inactive');
+         $foreign = $this->section($b, 'A', 'Fictional foreign active');

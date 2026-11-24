@@ -1,0 +1,3 @@
+@extends('layouts.app')
+@section('title','System Settings')
+@section('content')<form method="post" action="{{ route('settings.save') }}" class="panel max-w-2xl">@csrf<label for="organization">Organization name</label><input id="organization" name="organization_name" value="{{ old('organization_name',$settings['organization_name']??'Public Market Administration') }}" required><label for="notice">Staff notification</label><textarea id="notice" name="notice" maxlength="500">{{ old('notice',$settings['notice']??'') }}</textarea><button class="btn mt-5">Save settings</button><p class="notice mt-5">Billing policy is not inferred from these settings. Scheduled draft generation is disabled by default; automatic posting is unavailable.</p></form>@endsection

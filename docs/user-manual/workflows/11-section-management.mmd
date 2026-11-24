@@ -1,0 +1,9 @@
+flowchart TD
+    N0["Section manager: Open Market Sections and choose the market."]
+    N1["Section manager: Save code, name, display order and optional description or color."]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Resolve duplicate names and codes within the selected market."]
+    N2["Stall manager: Search active sections in the stall form and save the stall."]
+    N1 --> N2
+    N3["Map viewer: Verify current section labels and occupancy counts."]
+    N2 --> N3

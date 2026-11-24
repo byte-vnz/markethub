@@ -1,0 +1,11 @@
+flowchart TD
+    N0["Requester: Choose the assignment and reference month in Rental Information."]
+    N1["Requester: Preview one method, enter the reason and submit full prospective months."]
+    N0 --> N1
+    N2["Separate approver: Review the proposal and policy coverage. Approve or reject."]
+    N1 --> N2
+    N2 -->|Validation fails| F2["Resolve missing coverage or exception authority before approving."]
+    N3["Billing and lease officers: Review the applicable terms before creating a new financial snapshot."]
+    N2 --> N3
+    N4["Authorized officer: If needed, return to automatic rent from an eligible future month."]
+    N3 --> N4

@@ -1,0 +1,21 @@
+{
+    "training_only": true,
+    "contract_id": 1,
+    "status": "void",
+    "issued": false,
+    "legal_visual_approval": false,
+    "sha256": "c2d1041ce8157a36b603e047356343fdebe533f21405aa68096a0bc7c3fdd0a8",
+    "copied_sha256": "c2d1041ce8157a36b603e047356343fdebe533f21405aa68096a0bc7c3fdd0a8",
+    "assessment_id": 2,
+    "override_id": 1,
+    "values": {
+        "rental_rate_sqm": "25.00",
+        "daily_rental": "250.00",
+        "monthly_rental": "7750.00",
+        "monthly_cusa": "310.00",
+        "total_monthly_rental_cusa": "8060.00",
+        "advance_rental": "15500.00",
+        "security_deposit": "7750.00",
+        "total_initial_payment": "23250.00"
+    }
+}

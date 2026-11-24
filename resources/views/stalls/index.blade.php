@@ -1,0 +1,28 @@
+@extends('layouts.app')
+@section('title','Stall Management')
+@section('subtitle','Maintain physical stalls and verified locations. Agreed rental values remain in their historical assessments.')
+@section('actions')@can('stalls.manage')<a class="btn" href="{{ route('records.create',['type'=>'stalls','market_id'=>request('market_id')]) }}">Add stall</a>@endcan @endsection
+@section('content')
+<div class="flex flex-wrap gap-3 mb-4"><a class="btn secondary" href="{{ route('records.index','categories') }}">Physical categories</a>@can('sections.view')<a class="btn secondary" href="{{ route('records.index','sections') }}">Market sections</a>@endcan @can('map.view')<a class="btn secondary" href="{{ route('map') }}">Open market layout</a>@endcan</div>
+<section class="panel">
+<form method="get" class="toolbar mb-5">
+<div><label for="q">Stall code</label><input id="q" name="q" maxlength="100" value="{{ request('q') }}" placeholder="Search stall code"></div>
+<div><label for="market_id">Market</label><select id="market_id" name="market_id" data-clear-section-filter="section_id"><option value="">All markets</option>@foreach($stallMarkets as $market)<option value="{{ $market->id }}" @if(request('market_id')==$market->id)selected @endif>{{ $market->name }}</option>@endforeach</select></div>
+<div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>@foreach($stallSections as $section)<option value="{{ $section->id }}" @if(request('section_id')==$section->id)selected @endif>{{ $section->name }} · {{ $section->market->name }}@if($section->status==='inactive') (Inactive)@endif</option>@endforeach</select></div>
+<div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+@can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan
+<div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+<button class="btn secondary">Apply filters</button><a class="text-sm underline py-3" href="{{ route('records.index','stalls') }}">Clear</a>
+</form>
+<div class="tablewrap" role="region" aria-label="Stall records" tabindex="0"><table><thead><tr><th scope="col">Stall / section</th><th scope="col">Area / location</th><th scope="col">Occupancy</th>@can('tenants.view')<th scope="col">Tenant / business</th>@endcan @can('billing.view')<th scope="col">Initial assessment / legacy rent</th>@endcan<th scope="col">Actions</th></tr></thead><tbody>
+@forelse($records as $record)
+@php($assignment=$record->currentAssignment)
+@php($assessment=$assignment && $assignment->agreement ? $assignment->agreement->assessment : null)
+<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?? 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
+@can('tenants.view')<td>@if($assignment)<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}<div class="text-xs text-slate-600">{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</div>@else<span class="text-slate-500">Unassigned</span>@endif</td>@endcan
+@can('billing.view')<td>@if($assessment)<span>PHP {{ $assessment->rental_rate_sqm }} / sq. m. / day</span><br>PHP {{ $assessment->daily_rental }} daily<div class="text-xs text-slate-600">{{ ucfirst($assessment->location_type) }} · Reference month {{ $assessment->period }}</div>@elseif($assignment && $assignment->agreement)<span>PHP {{ $assignment->agreement->monthly_amount }} / month</span><div class="text-xs text-slate-600">Legacy agreement</div>@else<span class="text-slate-500">No assessment</span>@endif</td>@endcan
+<td><div class="flex flex-wrap gap-3"><a class="text-blue-800 underline" href="{{ route('records.show',['stalls',$record->id]) }}">View<span class="sr-only"> stall {{ $record->code }} at {{ $record->market->name }}</span></a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['stalls',$record->id]) }}">Edit<span class="sr-only"> stall {{ $record->code }} at {{ $record->market->name }}</span></a>@endcan</div></td></tr>
+@empty<tr><td colspan="6" class="empty">No stalls match these filters.</td></tr>@endforelse
+</tbody></table></div><div class="mt-5">{{ $records->links() }}</div>
+</section>
+@endsection

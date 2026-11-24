@@ -1,0 +1,16 @@
+flowchart TD
+    N0["Stall manager: Verify area and Inner or Outer location in Stall Management."]
+    N1["Assignment manager: Choose an eligible stall, active tenant and owner-linked active business."]
+    N0 --> N1
+    N2["Application: Resolve the approved category rate and market rental policy."]
+    N1 --> N2
+    N2 -->|Validation fails| F2["Unclassified stalls and draft schedules cannot support an assessment."]
+    N3["Assignment manager: Enter eligible dates, agreement reference and any additional-occupancy authority."]
+    N2 --> N3
+    N4["Application: Check occupancy conflicts and each involved market’s concurrent limit."]
+    N3 --> N4
+    N4 -->|Validation fails| F4["Additional occupancy needs authority for the global count."]
+    N5["Application: Save occupied assignment, agreement and frozen assessment together."]
+    N4 --> N5
+    N6["Authorized viewer: Verify the stall, assessment and assignment in the map or tenant profile."]
+    N5 --> N6

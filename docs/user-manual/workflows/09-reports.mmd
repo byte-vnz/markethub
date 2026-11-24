@@ -1,0 +1,17 @@
+flowchart TD
+    N0["Authorized viewer: Open Reports and select a report type"]
+    N1["Application: Check the report’s own access permissions."]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Access denied when report permission is missing"]
+    N2["Authorized viewer: Set only the supported IDs, dates or assessed location for that report."]
+    N1 --> N2
+    N3["Application: Validate identifiers, date range and tenant ID for a statement."]
+    N2 --> N3
+    N3 -->|Validation fails| F3["Correct invalid filters and resubmit"]
+    N4["Authorized viewer: Review paginated report results and interpretation"]
+    N3 --> N4
+    N5["Authorized viewer: Choose CSV, XLSX, PDF or print output"]
+    N4 --> N5
+    N6["Application: Export all matching rows only within 5000-row limit"]
+    N5 --> N6
+    N6 -->|Validation fails| F6["Narrow filters when result exceeds 5000 rows"]

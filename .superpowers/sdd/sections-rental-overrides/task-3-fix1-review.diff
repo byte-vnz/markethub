@@ -1,0 +1,439 @@
+Changed files (5):
+app/Http/Controllers/RentalOverrideController.php
+app/Http/Requests/RentalOverrideRequest.php
+resources/views/rental-overrides/form.blade.php
+resources/views/rental-overrides/index.blade.php
+tests/Feature/RentalOverrideWorkflowTest.php
+
+File comparison review package (no Git repository). Base: .qa\sections-overrides-checkpoint\after-task-3-root.zip
+--- before/app/Http/Controllers/RentalOverrideController.php
++++ after/app/Http/Controllers/RentalOverrideController.php
+@@ -1,17 +1,17 @@
+ <?php
+ 
+ namespace App\Http\Controllers;
+ 
+ use App\Http\Requests\RentalOverrideRequest;
+ use App\Models\{RentalOverride, StallAssignment, Tenant};
+-use App\Services\RentalOverrideService;
++use App\Services\{RentalCalculationService, RentalOverrideService};
+ use App\Support\AssignmentRental;
+ use Carbon\Carbon;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Arr;
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Support\Str;
+ use Illuminate\Validation\ValidationException;
+ 
+ class RentalOverrideController extends Controller
+ {
+@@ -27,56 +27,60 @@
+         $this->scope($tenant, $assignment, 'history');
+         $period = $this->period($request);
+         $rows = $assignment->rentalOverrides()->with(['requester:id,name', 'approver:id,name', 'initialAssessment'])
+             ->latest('revision')->paginate(10)->withQueryString();
+         $user = $request->user();
+         $review = [];
+         $fingerprints = [];
+         foreach ($rows as $row) {
+             $row->setRelation('assignment', $assignment);
+             if ($row->status === 'pending' && $user->can('rentals.override.approve') && (int) $row->requested_by !== (int) $user->id) {
+-                $review[$row->id] = RentalOverrideService::review($row);
++                $proposal = app(RentalCalculationService::class)->proposedAmounts(
++                    $row->initialAssessment, substr($row->effective_from, 0, 7), $row->override_type,
++                    $row->override_rate_per_sqm, $row->override_daily_amount
++                );
++                $review[$row->id] = RentalOverrideService::review($row) + Arr::only($proposal, ['out_of_range', 'zero_rent']);
+             }
+             if ($row->status === 'draft' && $user->can('rentals.override.request') && (int) $row->requested_by === (int) $user->id) {
+                 $fingerprints[$row->id] = RentalOverrideService::fingerprint($row);
+             }
+         }
+         [$quote, $quoteError] = AssignmentRental::quote($assignment, $period);
+         $earliest = $user->can('rentals.override.request') ? AssignmentRental::earliestRequestMonth($assignment) : null;
+         return $this->privateView('rental-overrides.index', compact('tenant', 'assignment', 'rows', 'period', 'quote', 'quoteError', 'earliest', 'review', 'fingerprints'));
+     }
+ 
+     public function create(Request $request, Tenant $tenant, StallAssignment $assignment)
+     {
+         $this->scope($tenant, $assignment, 'request');
+         $period = $this->period($request);
+         $input = $request->validate([
+             'source_override_id'=>'nullable|integer|min:1', 'computation_mode'=>'nullable|in:automatic,manual_override',
+         ]);
++        if (isset($input['source_override_id'])) {
++            $this->authorize('rentals.override.history');
++        }
+         $earliest = AssignmentRental::earliestRequestMonth($assignment);
+         if (($input['computation_mode'] ?? null) === 'automatic') {
+             if ($earliest && $request->user()->can('rentals.override.history') &&
+                 $assignment->rentalOverrides()->covering($earliest, $assignment->end_date)->exists()) {
+                 return $this->historyRedirect($request, $tenant, $assignment)->with('rental_mode_notice',
+                     'An authorized reviewer can choose Return to automatic on the approved request and set a prospective effective date.');
+             }
+             return $this->profileRedirect($request, $tenant)->with('rental_mode_notice',
+                 'Automatic rent applies by default. An approved override can end through an authorized return to automatic or its recorded expiry.');
+         }
+         if (!$earliest) {
+             return $this->historyRedirect($request, $tenant, $assignment)->withErrors(['assignment'=>'Choose an active assessed assignment with a full prospective month.']);
+         }
+         $source = isset($input['source_override_id']) ? RentalOverride::where('stall_assignment_id', $assignment->id)
+             ->where('status', '!=', 'draft')->findOrFail($input['source_override_id']) : null;
+-        if ($source) {
+-            $this->authorize('rentals.override.history');
+-        }
+         $draft = new RentalOverride(['submission_key'=>(string) Str::uuid(), 'source_override_id'=>optional($source)->id,
+             'override_type'=>optional($source)->override_type ?? 'rate_per_sqm']);
+         return $this->form($tenant, $assignment, $draft, $earliest, $period);
+     }
+ 
+     public function edit(Request $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
+     {
+         $this->scope($tenant, $assignment, 'request');
+         abort_unless((int) $override->stall_assignment_id === (int) $assignment->id && $override->status === 'draft', 404);
+         abort_unless((int) $override->requested_by === (int) $request->user()->id, 403);
+@@ -113,21 +117,23 @@
+         return response()->json(Arr::only($amounts, [
+             'computation_mode', 'rental_override_id', 'automatic_rate_per_sqm', 'automatic_daily_rental', 'daily_rental',
+             'rental_difference', 'monthly_rental', 'monthly_cusa', 'total_monthly_rental_cusa', 'billing_days',
+             'equivalent_rate_per_sqm', 'contract_rate_consistent', 'out_of_range', 'zero_rent',
+         ]))->header('Cache-Control', 'private, no-store');
+     }
+ 
+     public function submit(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
+     {
+         abort_unless((int) $override->requested_by === (int) $request->user()->id, 403);
+-        if ($override->status === 'draft' && !hash_equals(RentalOverrideService::fingerprint($override), $request->input('draft_fingerprint'))) {
++        $matchingTerms = hash_equals($override->request_hash, $request->input('draft_terms_hash'));
++        if (in_array($override->status, ['draft', 'pending'], true) && (!$matchingTerms ||
++            ($override->status === 'draft' && !hash_equals(RentalOverrideService::fingerprint($override), $request->input('draft_fingerprint'))))) {
+             throw ValidationException::withMessages(['draft_fingerprint'=>'Review the latest saved draft before submitting.']);
+         }
+         $this->service->submit($request->user(), $override);
+         return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Request submitted for review.');
+     }
+ 
+     public function approve(RentalOverrideRequest $request, Tenant $tenant, StallAssignment $assignment, RentalOverride $override)
+     {
+         $this->service->approve($request->user(), $override, $request->input('fingerprint'));
+         return $this->historyRedirect($request, $tenant, $assignment)->with('success', 'Override approved for the recorded effective period.');
+@@ -152,28 +158,30 @@
+         $this->authorize('rentals.override.'.$action);
+         abort_unless((int) $assignment->tenant_id === (int) $tenant->id, 404);
+         $assignment->setRelation('tenant', $tenant);
+         $assignment->loadMissing(['business', 'stall.section', 'agreement.assessment']);
+     }
+ 
+     private function form(Tenant $tenant, StallAssignment $assignment, RentalOverride $draft, ?string $earliest, string $period)
+     {
+         $assessment = AssignmentRental::initial($assignment);
+         $fingerprint = $draft->exists ? RentalOverrideService::fingerprint($draft) : null;
++        $postedFingerprint = old('draft_fingerprint');
++        $recoverInput = !$draft->exists || (is_string($postedFingerprint) && hash_equals($fingerprint, $postedFingerprint));
+         $end = $assignment->end_date ? Carbon::parse($assignment->end_date) : null;
+         $lastFullMonth = $end && $end->day !== $end->daysInMonth
+             ? $end->subMonthNoOverflow()->endOfMonth()->toDateString() : $assignment->end_date;
+         $selectedStart = $period.'-01';
+         $defaultStart = $earliest && $selectedStart >= $earliest && (!$lastFullMonth || $selectedStart <= $lastFullMonth)
+             ? $selectedStart : $earliest;
+         return $this->privateView('rental-overrides.form', compact('tenant', 'assignment', 'draft', 'earliest', 'assessment',
+-            'period', 'fingerprint', 'lastFullMonth', 'defaultStart'));
++            'period', 'fingerprint', 'lastFullMonth', 'defaultStart', 'recoverInput'));
+     }
+ 
+     private function period(Request $request): string
+     {
+         return $request->validate(['period'=>'nullable|date_format:Y-m'])['period'] ?? today()->format('Y-m');
+     }
+ 
+     private function historyRedirect(Request $request, Tenant $tenant, StallAssignment $assignment)
+     {
+         $period = $request->input('period');
+--- before/app/Http/Requests/RentalOverrideRequest.php
++++ after/app/Http/Requests/RentalOverrideRequest.php
+@@ -30,21 +30,21 @@
+         $action = $this->route()->getActionMethod();
+         $context = ['period'=>'nullable|date_format:Y-m'];
+         $reason = ['reason'=>'required|string|max:1000'];
+         $terms = [
+             'override_type'=>'required|in:rate_per_sqm,daily_amount',
+             'override_rate_per_sqm'=>'nullable',
+             'override_daily_amount'=>'nullable',
+         ] + array_fill_keys(['tenant_id', 'business_id', 'stall_id', 'stall_assignment_id'], 'sometimes|required|integer|min:1');
+         $rules = [
+             'preview'=>$terms,
+-            'submit'=>['draft_fingerprint'=>'required|string|size:64'],
++            'submit'=>['draft_fingerprint'=>'required|string|size:64', 'draft_terms_hash'=>'required|string|size:64'],
+             'approve'=>['fingerprint'=>'required|string|size:64'],
+             'reject'=>$reason,
+             'revoke'=>$reason + ['revocation_effective_from'=>'required|date_format:Y-m-d'],
+         ];
+         if (isset($rules[$action])) {
+             return $rules[$action] + ($action === 'preview' ? ['period'=>'required|date_format:Y-m'] : $context);
+         }
+         $draft = $terms + $reason + $context + [
+             'effective_from'=>'required|date_format:Y-m-d',
+             'effective_until'=>'nullable|date_format:Y-m-d|after_or_equal:effective_from',
+--- before/resources/views/rental-overrides/form.blade.php
++++ after/resources/views/rental-overrides/form.blade.php
+@@ -1,19 +1,19 @@
+ @extends('layouts.app')
+ @section('title',$draft->exists ? 'Edit Rental Override Draft' : 'Request Manual Rental Override')
+ @section('subtitle',$tenant->name.' · '.$assignment->stall->code.' · '.(optional($assignment->business)->name ?? 'Business unavailable'))
+ @section('content')
+ @php
+     $context = compact('tenant', 'assignment', 'period');
+     $target = $draft->exists ? route('rental-overrides.update', $context + ['override'=>$draft]) : route('rental-overrides.store', $context);
+-    $oldScalar = static function ($key, $value = null) {
+-        $input = old($key, $value);
++    $oldScalar = static function ($key, $value = null) use ($recoverInput) {
++        $input = $recoverInput ? old($key, $value) : $value;
+         return is_scalar($input) ? $input : $value;
+     };
+     $type = $oldScalar('override_type', $draft->override_type);
+ @endphp
+ <section class="panel max-w-4xl">
+     <div class="flex flex-wrap items-start justify-between gap-3">
+         <div>
+             <h2>Proposed rental terms</h2>
+             <p class="text-sm text-slate-600 mt-2">Current section {{ optional($assignment->stall->section)->name ?? 'Unknown' }} · Return to reference month {{ $period }}</p>
+         </div>
+@@ -22,20 +22,23 @@
+         @else
+             <a class="btn secondary" href="{{ route('records.show',['tenants',$tenant->id,'tab'=>auth()->user()->can('billing.view') ? 'rental' : 'overview','period'=>$period]) }}">Tenant record</a>
+         @endcan
+     </div>
+     @if($assessment)
+         <p class="text-sm mt-4">Frozen automatic basis · {{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</p>
+         <p class="text-sm text-slate-600 mt-1">PHP {{ $assessment->rental_rate_sqm }} per sq. m. · PHP {{ $assessment->daily_rental }} daily · Approved range PHP {{ $assessment->minimum_rate }}–{{ $assessment->maximum_rate }} per sq. m.</p>
+     @endif
+     @if(!$earliest)
+         <p class="notice mt-4">This assignment has no eligible full prospective month. The saved draft remains in history.</p>
++    @endif
++    @if($draft->exists && !$recoverInput && session()->hasOldInput('override_type'))
++        <p class="notice mt-4" role="status">Showing the latest saved draft. Review these terms and re-enter any edits you want to keep.</p>
+     @endif
+     @if($draft->source_override_id)
+         <p class="text-sm text-slate-600 mt-3">Revision of request #{{ $draft->source_override_id }}. Enter the revised terms below.</p>
+     @endif
+     <form action="{{ $target }}" method="post" class="mt-5"
+           data-rental-override data-preview-url="{{ route('rental-overrides.preview',compact('tenant','assignment')) }}">
+         @csrf
+         @if($draft->exists) @method('PUT') <input type="hidden" name="draft_fingerprint" value="{{ $fingerprint }}"> @endif
+         <input type="hidden" name="period" value="{{ $period }}">
+         <input type="hidden" name="submission_key" value="{{ $draft->exists ? $draft->submission_key : $oldScalar('submission_key',$draft->submission_key) }}">
+@@ -85,23 +88,24 @@
+             <div class="flex flex-wrap gap-2 mt-5">
+                 @if($draft->exists)
+                     <button class="btn" type="submit">Save draft changes</button>
+                 @else
+                     <button class="btn secondary" type="submit" name="intent" value="save">Save draft</button>
+                     <button class="btn" type="submit" name="intent" value="submit">Submit for review</button>
+                 @endif
+             </div>
+         </fieldset>
+     </form>
+-    @if($draft->exists && $earliest && !session()->hasOldInput('override_type'))
++    @if($draft->exists && $earliest && (!$recoverInput || !session()->hasOldInput('override_type')))
+         <form method="post" action="{{ route('rental-overrides.submit',$context + ['override'=>$draft]) }}" class="mt-5 border-t border-slate-200 pt-4"
+               data-confirm="Submit the saved draft for review?">
+             @csrf
+             <input type="hidden" name="period" value="{{ $period }}">
+             <input type="hidden" name="draft_fingerprint" value="{{ $fingerprint }}">
++            <input type="hidden" name="draft_terms_hash" value="{{ $draft->request_hash }}">
+             <p class="text-sm text-slate-600 mb-2">Submission freezes the saved terms. Save any edits before submitting.</p>
+             <button class="btn secondary" type="submit" data-submit-saved-draft>Submit saved draft</button>
+         </form>
+     @endif
+ </section>
+ <script defer src="{{ asset('assets/rental-overrides.js') }}"></script>
+ @endsection
+--- before/resources/views/rental-overrides/index.blade.php
++++ after/resources/views/rental-overrides/index.blade.php
+@@ -71,27 +71,35 @@
+                     <dl class="mt-2">
+                         <div class="detailrow"><dt>Policy revision / reference</dt><dd>#{{ $policy['id'] }} · {{ $policy['reference_document'] }}</dd></div>
+                         <div class="detailrow"><dt>Policy effective period</dt><dd>{{ $policy['effective_from'] }} – {{ $policy['effective_until'] ?? 'Open-ended' }}</dd></div>
+                         <div class="detailrow"><dt>Out-of-range overrides authorized</dt><dd>{{ $policy['allow_out_of_range_overrides'] ? 'Yes' : 'No' }}</dd></div>
+                         <div class="detailrow"><dt>Zero-rent overrides authorized</dt><dd>{{ $policy['allow_zero_rent_overrides'] ? 'Yes' : 'No' }}</dd></div>
+                         <div class="detailrow"><dt>Exception authority reference</dt><dd>{{ $policy['override_authority_reference'] ?? '—' }}</dd></div>
+                     </dl>
+                 </details>
+             @endif
+             @if($approval && !$policy)<p class="notice mt-4">One approved policy must cover the entire requested period before approval.</p>@endif
++            @if($approval && ($approval['out_of_range'] || $approval['zero_rent']))
++                <div class="notice mt-4">
++                    @if($approval['out_of_range'])<p>Proposed daily rent is outside the approved category range.</p>@endif
++                    @if($approval['zero_rent'])<p>This proposal requests a zero-rent exemption. CUSA remains payable.</p>@endif
++                    <p>Approval requires explicit policy authority and supporting references.</p>
++                </div>
++            @endif
+             <div class="flex flex-wrap gap-3 items-start mt-4">
+                 @if(isset($fingerprints[$override->id]))
+                     <a class="btn secondary" href="{{ route('rental-overrides.edit',$rowContext) }}">Edit draft</a>
+                     @if($earliest)
+                         <form method="post" action="{{ route('rental-overrides.submit',$rowContext) }}" data-confirm="Submit these saved terms for review?">
+                             @csrf
+                             <input type="hidden" name="draft_fingerprint" value="{{ $fingerprints[$override->id] }}">
++                            <input type="hidden" name="draft_terms_hash" value="{{ $override->request_hash }}">
+                             <button class="btn" type="submit">Submit saved draft</button>
+                         </form>
+                     @endif
+                 @elseif($earliest && $override->status !== 'draft')
+                     <a class="btn secondary" href="{{ route('rental-overrides.create',$context + ['source_override_id'=>$override->id]) }}">Create revised request</a>
+                 @endif
+                 @if($approval && $policy)
+                     <form method="post" action="{{ route('rental-overrides.approve',$rowContext) }}" data-confirm="Approve the displayed request and policy?">
+                         @csrf
+                         <input type="hidden" name="fingerprint" value="{{ $approval['fingerprint'] }}">
+--- before/tests/Feature/RentalOverrideWorkflowTest.php
++++ after/tests/Feature/RentalOverrideWorkflowTest.php
+@@ -1,15 +1,15 @@
+ <?php
+ 
+ namespace Tests\Feature;
+ 
+-use App\Models\{Market, MarketSection, RentalOverride, RentalPolicy, Stall, Tenant, User};
++use App\Models\{BusinessCategoryRentalRate, Market, MarketSection, RentalOverride, RentalPolicy, Stall, Tenant, User};
+ use App\Services\{AssignmentService, RentalOverrideService};
+ use Carbon\Carbon;
+ use Database\Seeders\RoleSeeder;
+ use Illuminate\Foundation\Testing\RefreshDatabase;
+ use Illuminate\Support\Str;
+ use Tests\Fixtures\ApprovedRentalConfiguration;
+ use Tests\TestCase;
+ 
+ class RentalOverrideWorkflowTest extends TestCase
+ {
+@@ -30,20 +30,21 @@
+         $this->seed(RoleSeeder::class);
+         $this->requester = $this->user('Requester', 'Market Staff');
+         $this->reviewer = $this->user('Reviewer', 'Super Administrator');
+         $this->actingAs($this->requester);
+         $this->tenant = Tenant::create(['name'=>'Synthetic tenant', 'reference'=>'T1', 'status'=>'active']);
+         $market = Market::create(['name'=>'Fictional market', 'code'=>'M1', 'status'=>'active']);
+         $this->section = MarketSection::create(['market_id'=>$market->id, 'code'=>'S1', 'name'=>'Original section', 'status'=>'active']);
+         $this->stall = Stall::create(['market_id'=>$market->id, 'market_section_id'=>$this->section->id,
+             'code'=>'A1', 'classification'=>'standard', 'location_type'=>'outer', 'area'=>'10.00', 'status'=>'vacant']);
+         $business = $this->businessWithApprovedRental($this->reviewer, $this->tenant, $market->id);
++        BusinessCategoryRentalRate::where('business_category_id', $business->business_category_id)->update(['minimum_rate'=>'21.04']);
+         $this->assignment = app(AssignmentService::class)->assign($this->reviewer, [
+             'tenant_id'=>$this->tenant->id, 'stall_id'=>$this->stall->id, 'business_id'=>$business->id,
+             'start_date'=>'2029-12-01', 'agreement_reference'=>'REF-TEST',
+         ]);
+         $this->url = "/tenants/{$this->tenant->id}/assignments/{$this->assignment->id}/rental-overrides";
+     }
+ 
+     protected function tearDown(): void
+     {
+         Carbon::setTestNow();
+@@ -123,34 +124,104 @@
+         $this->assertSame('approved', $pending->fresh()->status);
+     }
+ 
+     public function test_draft_edit_and_submit_bind_displayed_terms(): void
+     {
+         $terms = $this->terms();
+         $this->post($this->url, $terms + ['intent'=>'save'])->assertRedirect();
+         $draft = RentalOverride::sole();
+         $url = $this->url.'/'.$draft->id;
+         $stale = RentalOverrideService::fingerprint($draft);
+-        $this->get($url.'/edit')->assertOk()->assertSee($stale);
++        $this->get($url.'/edit')->assertOk()->assertSee($stale)->assertSee($draft->request_hash);
+         $this->putJson($url, array_replace($terms, ['reason'=>'Revised pending request']))
+             ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+         $this->put($url, array_replace($terms, ['reason'=>'Revised pending request', 'draft_fingerprint'=>$stale]))->assertRedirect();
+         $this->putJson($url, array_replace($terms, ['reason'=>'Stale browser edit', 'draft_fingerprint'=>$stale]))
+             ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+         $this->assertSame('Revised pending request', $draft->fresh()->reason);
+-        $this->postJson($url.'/submit', ['draft_fingerprint'=>$stale])->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        $this->postJson($url.'/submit', ['draft_fingerprint'=>$stale, 'draft_terms_hash'=>$draft->request_hash])
++            ->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
+         $this->assertSame('draft', $draft->fresh()->status);
+-        $fresh = RentalOverrideService::fingerprint($draft->fresh());
+-        $this->post($url.'/submit', ['draft_fingerprint'=>$fresh])->assertRedirect();
++        $fresh = $draft->fresh();
++        $submission = ['draft_fingerprint'=>RentalOverrideService::fingerprint($fresh), 'draft_terms_hash'=>$fresh->request_hash];
++        $this->post($url.'/submit', $submission)->assertRedirect();
+         RentalPolicy::firstOrFail()->update(['reference_document'=>'DRIFTED TEST AUTHORITY']);
+-        $this->post($url.'/submit', ['draft_fingerprint'=>$fresh])->assertRedirect();
++        $this->post($url.'/submit', $submission)->assertRedirect();
+         $this->assertSame('pending', $draft->fresh()->status);
++    }
++
++    public function test_stale_html_edit_retry_shows_and_saves_the_current_draft(): void
++    {
++        $terms = $this->terms(['reason'=>'Original draft terms']);
++        $service = app(RentalOverrideService::class);
++        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
++        $url = $this->url.'/'.$draft->id;
++        $edit = $url.'/edit?period=2030-02';
++        $oldFingerprint = RentalOverrideService::fingerprint($draft);
++        $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Newer saved terms']), $draft);
++
++        $this->from($edit)->put($url, array_replace($terms, [
++            'reason'=>'Stale browser edits', 'draft_fingerprint'=>$oldFingerprint, 'period'=>'2030-02',
++        ]))->assertRedirect($edit)->assertSessionHasErrors('draft_fingerprint');
++        $response = $this->get($edit)->assertOk()
++            ->assertSee('Showing the latest saved draft')
++            ->assertSee('Newer saved terms')->assertDontSee('Stale browser edits');
++        $this->assertSame(1, preg_match('/name="draft_fingerprint" value="([a-f0-9]{64})"/', $response->getContent(), $fingerprint));
++        $this->assertSame(1, preg_match('/<textarea id="override_reason"[^>]*>(.*?)<\/textarea>/s', $response->getContent(), $reason));
++        $this->put($url, array_replace($terms, [
++            'reason'=>html_entity_decode($reason[1]), 'draft_fingerprint'=>$fingerprint[1], 'period'=>'2030-02',
++        ]))->assertRedirect($edit)->assertSessionHasNoErrors();
++        $this->assertSame('Newer saved terms', $draft->fresh()->reason);
++    }
++
++    public function test_two_tabs_bind_pending_replay_to_the_original_displayed_terms(): void
++    {
++        $terms = $this->terms(['reason'=>'Tab A terms']);
++        $service = app(RentalOverrideService::class);
++        $draft = $service->saveDraft($this->requester, $this->assignment, $terms);
++        $url = $this->url.'/'.$draft->id.'/submit';
++        $tabA = ['draft_terms_hash'=>$draft->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($draft)];
++        $updated = $service->saveDraft($this->requester, $this->assignment, array_replace($terms, ['reason'=>'Tab B terms']), $draft);
++        $tabB = ['draft_terms_hash'=>$updated->request_hash, 'draft_fingerprint'=>RentalOverrideService::fingerprint($updated)];
++        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
++        $this->postJson($url, $tabA)->assertStatus(422)->assertJsonValidationErrors('draft_fingerprint');
++        RentalPolicy::firstOrFail()->update(['reference_document'=>'Authority changed after submission']);
++        $this->post($url, $tabB)->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame('pending', $draft->fresh()->status);
++        $this->assertSame('Tab B terms', $draft->fresh()->reason);
++    }
++
++    public function test_request_only_reader_cannot_distinguish_existing_and_missing_revision_sources(): void
++    {
++        $source = $this->pending();
++        $limited = $this->user('LimitedRequester', 'Authorized Collection Officer');
++        $limited->givePermissionTo(['rentals.override.view', 'rentals.override.request']);
++        $this->actingAs($limited)->get($this->url.'/create')->assertOk();
++        $this->get($this->url.'/create?source_override_id='.$source->id)->assertForbidden();
++        $this->get($this->url.'/create?source_override_id='.($source->id + 999))->assertForbidden();
++    }
++
++    public function test_approval_only_reader_sees_request_specific_range_and_exemption_warnings(): void
++    {
++        $outside = $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
++            'override_daily_amount'=>'200', 'reason'=>'Direct daily outside approved range']);
++        $this->pending(['override_type'=>'daily_amount', 'override_rate_per_sqm'=>null,
++            'override_daily_amount'=>'0', 'reason'=>'Zero rent exemption requested']);
++        $approver = $this->user('LimitedApprover', 'Authorized Collection Officer');
++        $approver->givePermissionTo(['rentals.override.view', 'rentals.override.history', 'rentals.override.approve']);
++        $this->assertFalse($approver->can('rentals.override.request'));
++        $response = $this->actingAs($approver)->get($this->url)->assertOk()
++            ->assertSee('Proposed daily rent is outside the approved category range.')
++            ->assertSee('This proposal requests a zero-rent exemption. CUSA remains payable.')
++            ->assertSee('Approve request')->assertSee(RentalOverrideService::fingerprint($outside));
++        $this->assertSame(2, substr_count($response->getContent(), 'Proposed daily rent is outside the approved category range.'));
++        $this->assertSame(1, substr_count($response->getContent(), 'This proposal requests a zero-rent exemption.'));
+     }
+ 
+     public function test_approval_binds_policy_and_rejection_revision_and_revocation_retain_history(): void
+     {
+         $pending = $this->pending();
+         $this->requester->givePermissionTo('rentals.override.approve');
+         $url = $this->url.'/'.$pending->id;
+         $review = RentalOverrideService::review($pending);
+         $this->postJson($url.'/approve', ['fingerprint'=>$review['fingerprint']])->assertStatus(422)->assertJsonValidationErrors('approved_by');
+         $this->actingAs($this->reviewer)->get($this->url.'?period=2030-02')

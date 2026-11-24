@@ -1,0 +1,16 @@
+flowchart TD
+    N0["Super Administrator: Open Settings then Users and Roles."]
+    N1["Super Administrator: Create or edit account name, unique email, role and active flag"]
+    N0 --> N1
+    N2["Super Administrator: Supply confirmed password for new account; optional reset when editing"]
+    N1 --> N2
+    N3["Application: Validate email, password and one of six existing roles"]
+    N2 --> N3
+    N3 -->|Validation fails| F3["Follow the error link. The same account form keeps the safe fields."]
+    N4["Application: Protect last active Super Administrator and prevent self-disable"]
+    N3 --> N4
+    N4 -->|Validation fails| F4["Choose another safe account or retain administrator access"]
+    N5["Application: Hash changed password, synchronize selected role and record audit event"]
+    N4 --> N5
+    N6["Account holder: Log in using email; active account and permissions govern access"]
+    N5 --> N6

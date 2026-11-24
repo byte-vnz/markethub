@@ -1,0 +1,17 @@
+flowchart TD
+    N0["Billing officer: Generate a full-month draft from the assessment or legacy agreement."]
+    N1["Posting officer: Review base rent and CUSA for assessed bills. Explicitly post."]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Draft generation never automatically posts"]
+    N2["Collection officer: Enter payment date, method, reference and exact positive amount"]
+    N1 --> N2
+    N3["Application: Check receipt history and allocate entire amount to tenant posted bills"]
+    N2 --> N3
+    N3 -->|Validation fails| F3["Reject overpayment, duplicate reference or allocation mismatch"]
+    N4["Posting officer: Review draft and post; allocations reduce ledger balance"]
+    N3 --> N4
+    N5["Treasury / Accounting: Confirm unreversed posted payment against Treasury information"]
+    N4 --> N5
+    N6["Authorized correction officer: Void draft or append posted reversal with reason; link replacement"]
+    N5 --> N6
+    N6 -->|Validation fails| F6["Preserve original payment and correction history"]

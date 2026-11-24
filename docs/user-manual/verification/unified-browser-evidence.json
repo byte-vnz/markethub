@@ -1,0 +1,68 @@
+{
+    "environment": "isolated testing SQLite; no operational MySQL records",
+    "captured_at": "2026-11-19T00:22:30+08:00",
+    "counts": {
+        "tenants": 1,
+        "businesses": 1,
+        "assignments": 1,
+        "helpers": 1,
+        "contracts": 1
+    },
+    "account_leading_zeroes_preserved": true,
+    "assignment": {
+        "status": "active",
+        "location": "outer",
+        "rate": "26.88",
+        "daily_rental": "268.80",
+        "monthly_rental": "8064.00",
+        "monthly_cusa": "300.00"
+    },
+    "bill": {
+        "status": "posted",
+        "amount": "8364.00",
+        "paid": "2000",
+        "balance": "6364.00",
+        "items": [
+            {
+                "description": "Base rent / RA-851aa95d-03f0-480a-8719-1eea06b800df",
+                "amount": 8064
+            },
+            {
+                "description": "CUSA / RA-851aa95d-03f0-480a-8719-1eea06b800df",
+                "amount": 300
+            }
+        ]
+    },
+    "payments": [
+        {
+            "amount": "2000.00",
+            "status": "posted",
+            "reconciliation_status": "pending"
+        },
+        {
+            "amount": "100.00",
+            "status": "void",
+            "reconciliation_status": "pending"
+        }
+    ],
+    "contract": {
+        "status": "void",
+        "issued_at": null,
+        "monthly_total": "8364.00",
+        "sample_sha256": "cdb29e56d50e1510be8929c124751db4ea5554f6e0a35c39211dfd856d70f950",
+        "pdf_available": false
+    },
+    "browser": {
+        "draft_resume_confirm": true,
+        "inner_daily": "210.40",
+        "outer_daily": "268.80",
+        "partial_payment_posted": true,
+        "missing_approved_rate_blocked": true,
+        "partial_month_end_blocked": true,
+        "contract_generated_then_voided_not_issued": true,
+        "mobile_width": 390,
+        "tablet_width": 820,
+        "page_overflow": false,
+        "escape_closed_drawer": true
+    }
+}

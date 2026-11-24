@@ -1,0 +1,23 @@
+{
+  "version": "1.3",
+  "prepared": "2026-11-20",
+  "source_revision": "source-sha256-7ca16c9d284f",
+  "workflow_diagrams": 12,
+  "pdf": {
+    "Market_Stall_User_Manual.pdf": {
+      "pages": 94,
+      "outline_entries": 28,
+      "annotations": 28,
+      "issues": []
+    },
+    "Quick_Reference_Guide.pdf": {
+      "pages": 6,
+      "outline_entries": 8,
+      "annotations": 16,
+      "issues": []
+    }
+  },
+  "docx_visual_verification": "not performed by this builder; use render_docx.py",
+  "USER_MANUAL.md_sha256": "ca72916aab5b6bce0161dc1817d238f0f8029ca40652074cdec839955dc45a73",
+  "QUICK_REFERENCE_GUIDE.md_sha256": "75035e9d554b51e6f743d597cc69292207fc90d97c2f55f74fb8883d0207b60d"
+}

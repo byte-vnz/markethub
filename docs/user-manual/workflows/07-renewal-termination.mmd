@@ -1,0 +1,17 @@
+flowchart TD
+    N0["Authorized contract officer: Review contract dates, status and assignment history"]
+    N1["Issuing / closing officer: Expire an eligible lease, or enter a reason and confirm the named void or termination action"]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Do not close an already closed contract"]
+    N2["Assignment manager: Choose transfer / renewal, or end assignment with reason"]
+    N1 --> N2
+    N3["Application: Check later bills and full-month boundary rules"]
+    N2 --> N3
+    N3 -->|Validation fails| F3["Resolve billing and approved policy before partial-month changes"]
+    N4["Application: End old assignment, retain agreement history and mark stall vacant"]
+    N3 --> N4
+    N5["Assignment manager: For renewal or transfer, use an eligible business and a fresh assessment."]
+    N4 --> N5
+    N5 -->|Validation fails| F5["Reject overlap; retain original occupancy if transaction fails"]
+    N6["Contract officers: Create replacement contract only when dates do not overlap retained contracts"]
+    N5 --> N6

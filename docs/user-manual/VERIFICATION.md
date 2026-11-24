@@ -1,0 +1,29 @@
+# Documentation verification — 19 November 2026
+
+Version 1.2 covers Market Sections and assignment rental overrides. The source check verified 14 chapters, 50 permission rows across six roles, 20 report types, 63 actual screenshots and 12 workflows. Build provenance is in exports/build-manifest.json. The two fictional data exercises are separate.
+
+The main PDF has 90 pages, 28 bookmarks and 28 link annotations. The quick PDF has six pages. Automated checks found no text outside the printable region. Pages were rendered and reviewed using contact sheets and representative expanded pages. The Word package passed ZIP/XML, contents link targets and page-number field checks. Visual rendering in Word or LibreOffice remains pending because the renderer is unavailable.
+
+The Help suite passed 10 tests and 148 assertions after the new allowlists were added. The three v1.2 export routes returned the expected content types to an authorized user and redirected guests to sign-in. The v1.2 browser confirmed searches, manual figures and workflow listings. The isolated override exercise confirmed separate approval, December manual rent, January automatic return, exception rejection, map permissions and a preserved unissued Word contract. The report PDF displayed both fictional request records.
+
+See ../SECTION_OVERRIDE_TEST_RESULTS.md for the full regression results and verification limits. The source ZIP excludes temporary databases and credentials. The preview process and temporary runtime files were removed.
+
+## Prior v1.1 evidence
+
+Version1.1 covers the completed unified enhancement. Generated manual PDF79A4pages, editable DOCX and quick PDF6A4pages;52actual application image files,10editable Mermaid/PNG workflows and a checksum-verified fictional generated contract. Sources/preparation/version/hash metadata are in exports/build-manifest.json. Source revision: source-sha256-bc42bb6e40be. Prepared for LGU review, not officially approved.
+
+Final isolated application suite:182tests,1,277assertions passed on PHP8.2.12/SQLite:memory:. Existing Help guest/disabled/no-permission denial,6roles,download/preview/image allowlists, traversal blocking and topic/search checks remain included. Native PHP lint158files, PHP7.4grammar220files, Blade cache and asset build passed. No live MySQL migration/seed/backfill occurred. Detailed application evidence: ../UNIFIED_TEST_RESULTS.md.
+
+Browser captured actual fictional unified draft/resume/confirmation, category/policy approvals,10sqmOuter26.88preview,8364monthlybill,2000postedpayment and6364balance, profile/map/reports, original generated contract and retained void history, mobile/tablet and Help/search. Captured console errors/warnings: none. Screenshot dimensions/captions are in SCREENSHOT_INDEX.md. Sources were not AI mockups.44affected existing PNGs were refreshed losslessly from new actual captures,7new JPEGs added; login capture remained applicable. Payment100illustration was unposted/voided; captions distinguish it from posted2000. No legal issuance/signature/activation, future renewal or successful contract PDF conversion was simulated.
+
+All85PDFpages were rendered; all contact sheets and representative full-size pages visually inspected, including enlarged rental preview, role matrix and report/field tables. PDF text extraction/contents annotations/bookmarks pass; zero text outside printable bounds. Wide application reports also rendered legibly as field/value records (assessment2pages,registry1page). DOCX remains editable with well-formed ZIP/XML/relationships, headings, internal contents bookmarks/hyperlinks and page-number fields. DOCX visual rendering failed because LibreOffice soffice is absent; a secondary Windows temporary-directory cleanup error is recorded in .qa/unified-word-render.txt. PDF layout is not proof of Word equivalence.
+
+Source checker:14chapters,41permissionrows,6roles,19reports,51unique manual figure paths,52actual imagefiles,10diagrams,zeroerrors. Result:verification/source-cross-check.json; permissions and aggregate browser evidence are retained separately. Builder self-check passed. Documentation_Assets.zip contains editable text/screenshots/workflows/sample/verification sources and no QA databases/temporary credentials. Source XLSX and originalDOCX hashes remain unchanged.
+
+Preview server/database/scripts/temporary login/key files were removed after evidence capture. Browser download-event waits were not counted as success; download/preview authorization passed automated HTTP tests and actual export files were checked. Word pagination/nine-page contract fidelity, office printer output, live MySQL/UAT, actualPHP7.4 and LGU/legal/policy approvals remain pending. No production/regulatory certification claim is made.
+# Frontend modernization v1.3
+
+Rebuilt the complete 94-page PDF, six-page quick guide and editable DOCX with the bundled authoring runtime. The builder reported zero PDF text-bound errors and retained contents annotations and outlines. Reviewed contact sheets across both PDFs and the new fictional screen examples. Source verification found 14 chapters, 50 permission rows, 6 roles, 20 reports, 65 screenshots and 12 diagrams with zero source errors. All three authenticated Help download routes returned HTTP 200 and attachment headers with the rebuilt file sizes. The guest check redirected to login. The editable source archive passed its CRC and byte comparison and the DOCX package XML parsed successfully.
+
+The DOCX rendering attempt could not find LibreOffice `soffice.exe`. An additional Windows temporary-folder cleanup error followed. Word visual review and official LGU review remain open. Neither the exported manual layout nor the fictional contract download checks establish legal document fidelity or issuance approval. See `../frontend/RESPONSIVE_TEST_RESULTS.md` for the fictional browser checks.
+

@@ -1,0 +1,2109 @@
+Changed files (31):
+app/Console/Commands/ReconcileSections.php
+app/Http/Controllers/AssignmentController.php
+app/Http/Controllers/MapController.php
+app/Http/Controllers/RecordController.php
+app/Http/Controllers/TenantController.php
+app/Http/Requests/RecordRequest.php
+app/Models/MarketSection.php
+app/Models/Stall.php
+app/Policies/RecordPolicy.php
+app/Services/AssignmentService.php
+app/Services/Audit.php
+app/Services/SectionService.php
+app/Support/Resources.php
+config/navigation.php
+database/migrations/2026_11_19_000001_enhance_market_sections.php
+database/seeders/RoleSeeder.php
+public/assets/app.css
+public/assets/app.js
+resources/js/app.js
+resources/views/map/details.blade.php
+resources/views/map/index.blade.php
+resources/views/records/form.blade.php
+resources/views/records/index.blade.php
+resources/views/sections/form.blade.php
+resources/views/sections/index.blade.php
+resources/views/sections/show.blade.php
+resources/views/sections/swatch.blade.php
+resources/views/stalls/index.blade.php
+resources/views/stalls/section-picker.blade.php
+routes/web.php
+tests/Feature/SectionManagementTest.php
+
+File comparison review package (no Git repository). Base: C:\xampp\htdocs\market-stall\.qa\sections-overrides-checkpoint\source-before.zip
+--- before/app/Console/Commands/ReconcileSections.php
++++ after/app/Console/Commands/ReconcileSections.php
+@@ -0,0 +1,102 @@
++<?php
++
++namespace App\Console\Commands;
++
++use App\Services\{Ledger, SectionService};
++use Illuminate\Console\Command;
++use Illuminate\Support\Facades\{DB, Schema};
++use Symfony\Component\Console\Output\OutputInterface;
++
++class ReconcileSections extends Command
++{
++    protected $signature = 'sections:reconcile';
++    protected $description = 'Read-only section, stall, layout and financial preservation report.';
++
++    public function handle()
++    {
++        if (DB::getDriverName() === 'mysql' && DB::transactionLevel() === 0) {
++            DB::statement('SET TRANSACTION READ ONLY');
++        }
++        $report = DB::transaction(function () {
++            $sectionColumns = Schema::getColumnListing('market_sections');
++            $stallColumns = Schema::getColumnListing('stalls');
++            $sections = DB::table('market_sections')->orderBy('market_id')->orderBy('id')->get(['id', 'market_id', 'code', 'name', 'status']);
++            $duplicates = [];
++            foreach ($sections->groupBy('market_id') as $marketId => $records) {
++                $names = $records->groupBy(function ($section) {
++                    return SectionService::normalizedName($section->name);
++                });
++                foreach ($names as $normalized => $group) {
++                    if ($group->count() > 1) {
++                        $duplicates[] = ['market_id' => $marketId, 'normalized_name' => (string) $normalized, 'section_ids' => $group->pluck('id')->all()];
++                    }
++                }
++            }
++            $hasSectionLink = in_array('market_section_id', $stallColumns, true);
++            $orphans = [];
++            $mismatches = [];
++            if ($hasSectionLink) {
++                $links = DB::table('stalls AS s')->leftJoin('market_sections AS ms', 'ms.id', '=', 's.market_section_id');
++                $orphans = (clone $links)->whereNull('ms.id')->orderBy('s.id')->pluck('s.id')->all();
++                $mismatches = $links->whereColumn('s.market_id', '!=', 'ms.market_id')->orderBy('s.id')->pluck('s.id')->all();
++            }
++            $legacyColumns = array_values(array_filter($stallColumns, function ($name) {
++                return $name !== 'market_section_id' && stripos($name, 'section') !== false;
++            }));
++            $unchanged = [
++                'section_rows_sha256' => $this->digest($sections),
++                'stall_links_sha256' => $hasSectionLink
++                    ? $this->digest(DB::table('stalls')->orderBy('id')->select('id', 'market_id', 'market_section_id', 'status')->cursor()) : null,
++                'layout_positions_sha256' => $this->digest(DB::table('stall_layout_positions')->orderBy('stall_id')
++                    ->select('market_layout_id', 'stall_id', 'row', 'column', 'width', 'height')->cursor()),
++            ];
++            foreach (['market_layouts', 'stall_assignments', 'rental_agreements', 'lease_contracts', 'rental_assessments', 'rental_bills', 'payments', 'payment_allocations'] as $table) {
++                $unchanged[$table] = Schema::hasTable($table) ? DB::table($table)->count() : null;
++            }
++            $posted = DB::table('payments AS p')->where('p.status', 'posted');
++            $withoutReversals = function ($query) {
++                $query->selectRaw('1')->from('payment_reversals AS r')->whereColumn('r.payment_id', 'p.id');
++            };
++            $unchanged['financial'] = [
++                'posted_bill_amount' => Ledger::sum(Ledger::bills(), 'rental_bills.amount'),
++                'posted_payment_gross_amount' => Ledger::sum($posted, 'p.amount'),
++                'effective_posted_payment_amount' => Ledger::sum((clone $posted)->whereNotExists($withoutReversals), 'p.amount'),
++                'effective_payment_allocation_amount' => Ledger::sum((clone $posted)->join('payment_allocations AS a', 'p.id', '=', 'a.payment_id')
++                    ->whereNotExists($withoutReversals), 'a.amount'),
++                'posted_outstanding_balance' => Ledger::sum(Ledger::bills(), Ledger::balanceSql()),
++            ];
++            return [
++                'captured_at' => now()->toIso8601String(),
++                'mode' => 'read-only; discrepancies require review',
++                'schema' => ['market_sections' => $sectionColumns, 'stalls' => $stallColumns],
++                'counts' => [
++                    'sections' => $sections->count(),
++                    'stalls' => DB::table('stalls')->count(),
++                    'layout_positions' => DB::table('stall_layout_positions')->count(),
++                    'orphaned_stall_sections' => $hasSectionLink ? count($orphans) : null,
++                    'market_mismatched_stall_sections' => $hasSectionLink ? count($mismatches) : null,
++                    'normalized_duplicate_section_groups' => count($duplicates),
++                ],
++                'section_status_counts' => $sections->countBy('status'),
++                'stall_status_counts' => DB::table('stalls')->selectRaw('status, COUNT(*) AS count')->groupBy('status')->pluck('count', 'status'),
++                'sections_by_market' => $sections->groupBy('market_id'),
++                'normalized_duplicate_groups' => $duplicates,
++                'orphaned_stall_ids' => $orphans,
++                'market_mismatched_stall_ids' => $mismatches,
++                'legacy_stall_section_columns' => $legacyColumns,
++                'preservation_controls' => $unchanged,
++            ];
++        });
++        $this->output->writeln(json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), OutputInterface::OUTPUT_RAW);
++        return 0;
++    }
++
++    private function digest(iterable $rows): string
++    {
++        $hash = hash_init('sha256');
++        foreach ($rows as $row) {
++            hash_update($hash, json_encode($row, JSON_THROW_ON_ERROR)."\n");
++        }
++        return hash_final($hash);
++    }
++}
+--- before/app/Http/Controllers/AssignmentController.php
++++ after/app/Http/Controllers/AssignmentController.php
+@@ -18,20 +18,21 @@
+         }
+         return view("assignments.index", [
+             "assignments" => $q->latest()->paginate(20)->withQueryString(),
+         ]);
+     }
+     public function create()
+     {
+         $this->authorize("assignments.manage");
+         return view("assignments.form", [
+             "stalls" => Stall::whereIn("status", ["vacant", "reserved"])
++                ->inActiveSection()
+                 ->whereNotNull("location_type")
+                 ->with("market")
+                 ->orderBy("code")
+                 ->get(),
+             "tenants" => Tenant::where("status", "active")->orderBy("name")->get(),
+             "businesses" => $this->businesses()->with("tenant")->get(),
+         ]);
+     }
+     public function store(AssignmentRequest $r, AssignmentService $s)
+     {
+@@ -47,20 +48,21 @@
+     }
+     public function transferForm(StallAssignment $assignment)
+     {
+         $this->authorize("assignments.manage");
+         return view("assignments.transfer", [
+             "assignment" => $assignment,
+             "stalls" => Stall::where(function ($query) use ($assignment) {
+                 $query->whereIn("status", ["vacant", "reserved"])
+                     ->orWhere("id", $assignment->stall_id);
+             })
++                ->inActiveSection()
+                 ->whereNotNull("location_type")
+                 ->with("market")
+                 ->orderBy("code")
+                 ->get(),
+             "businesses" => $this->businesses()->where("tenant_id", $assignment->tenant_id)->get(),
+         ]);
+     }
+     public function transfer(AssignmentRequest $r, StallAssignment $assignment, AssignmentService $s)
+     {
+         $s->transfer(
+--- before/app/Http/Controllers/MapController.php
++++ after/app/Http/Controllers/MapController.php
+@@ -16,42 +16,48 @@
+         $request->validate([
+             "market_id" => "nullable|integer|exists:markets,id",
+             "section_id" => "nullable|integer",
+             "status" => "nullable|in:occupied,vacant,reserved,maintenance,inactive",
+             "location_type" => "nullable|in:inner,outer,unclassified",
+             "business_category_id" => "nullable|integer|exists:business_categories,id",
+         ]);
+         $markets = Market::orderBy("name")->get();
+         $market = $markets->firstWhere("id", (int) $request->market_id) ?: $markets->first();
+         $stalls = collect();
++        $sections = collect();
++        $sectionStalls = collect();
++        $selectedSection = null;
+         $layout = null;
+         if ($market) {
++            $sections = $market->sections()->inDisplayOrder()->get();
+             $q = $market->stalls()->with("position", "section");
+             if ($request->filled("section_id")) {
++                $selectedSection = $sections->firstWhere('id', (int) $request->section_id);
+                 $q->where("market_section_id", $request->section_id);
+             }
+             if ($request->filled("status")) {
+                 $q->where("status", $request->status);
+             }
+             if ($request->input('location_type') === 'unclassified') {
+                 $q->whereNull('location_type');
+             } elseif ($request->filled('location_type')) {
+                 $q->where('location_type',$request->input('location_type'));
+             }
+             if ($request->filled('business_category_id')) {
+                 $q->whereHas('currentAssignment.business',function ($q) use ($request) { $q->where('business_category_id',$request->input('business_category_id')); });
+             }
+             $stalls = $q->orderBy("code")->get();
++            $sectionStalls = $stalls->groupBy('market_section_id');
+             $layout = MarketLayout::where("market_id", $market->id)->first();
+         }
+         $businessCategories = $request->user()->can('tenants.view') ? \App\Models\BusinessCategory::orderBy('name')->get() : collect();
+-        return view("map.index", compact("markets", "market", "stalls", "layout", "businessCategories"));
++        return view('map.index', compact('markets', 'market', 'stalls', 'layout', 'businessCategories', 'sections', 'sectionStalls', 'selectedSection'));
+     }
+     public function details(Request $request, Stall $stall)
+     {
+         $this->authorize("view", $stall);
+         $stall->load("market", "section", "category");
+         $assignment = null;
+         $history = collect();
+         $payments = collect();
+         $balance = "0.00";
+         if ($request->user()->can("tenants.view")) {
+--- before/app/Http/Controllers/RecordController.php
++++ after/app/Http/Controllers/RecordController.php
+@@ -5,44 +5,51 @@
+ use App\Models\{
+     Market,
+     MarketSection,
+     Stall,
+     Tenant,
+     Business,
+     RentalRate,
+     RentalAgreement,
+     StallAssignment,
+ };
+-use App\Services\Audit;
++use App\Services\{Audit, SectionService};
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Validation\ValidationException;
+ class RecordController extends Controller
+ {
+     public function index(Request $request, $type)
+     {
+         if ($type === 'tenants') {
+             return app(TenantController::class)->index($request);
+         }
+         if ($type === 'businesses') {
+             $this->authorize('tenants.view');
+             return redirect()->route('tenant-businesses.index', $request->only('q','status','tenant_id'));
+         }
+         $spec = Resources::get($type);
+         $this->authorize($spec["permission"] . ".view");
++        if ($type === 'sections') {
++            return $this->sections($request);
++        }
+         $q = $spec["model"]::query();
+         if ($type === 'stalls') {
+             if ($request->filled('business_category_id')) {
+                 $this->authorize('tenants.view');
+             }
+-            $request->validate(['q'=>'nullable|string|max:100','location_type'=>'nullable|in:inner,outer,unclassified','business_category_id'=>'nullable|integer|exists:business_categories,id']);
++            $request->validate(['q'=>'nullable|string|max:100','location_type'=>'nullable|in:inner,outer,unclassified','business_category_id'=>'nullable|integer|exists:business_categories,id',
++                'market_id'=>'nullable|integer|exists:markets,id', 'section_id'=>'nullable|integer|exists:market_sections,id']);
+             $q->with(['market','section','category','currentAssignment.tenant','currentAssignment.business.businessCategory','currentAssignment.agreement.assessment']);
++            if ($request->filled('section_id')) {
++                $q->where('market_section_id', $request->input('section_id'));
++            }
+             if ($request->input('location_type') === 'unclassified') {
+                 $q->whereNull('location_type');
+             } elseif ($request->filled('location_type')) {
+                 $q->where('location_type',$request->input('location_type'));
+             }
+             if ($request->filled('business_category_id')) {
+                 $q->whereHas('currentAssignment.business',function ($q) use ($request) { $q->where('business_category_id',$request->input('business_category_id')); });
+             }
+         }
+         if ($request->filled("q")) {
+@@ -52,138 +59,218 @@
+             $q->where("market_id", $request->market_id);
+         }
+         if ($request->filled("status") && isset($spec["fields"]["status"])) {
+             $q->where("status", $request->status);
+         }
+         return view($type === 'stalls' ? 'stalls.index' : 'records.index', [
+             "spec" => $spec,
+             "type" => $type,
+             "records" => $q->orderByDesc("id")->paginate(20)->withQueryString(),
+             "businessCategories" => $type === 'stalls' && $request->user()->can('tenants.view') ? \App\Models\BusinessCategory::orderBy('name')->get() : collect(),
++            'stallMarkets' => $type === 'stalls' ? Market::orderBy('name')->get() : collect(),
++            'stallSections' => $type === 'stalls' ? MarketSection::with('market')->inDisplayOrder()
++                ->when($request->filled('market_id'), function ($sections) use ($request) {
++                    $sections->where('market_id', $request->input('market_id'));
++                })->get() : collect(),
+         ]);
++    }
++
++    private function sections(Request $request)
++    {
++        $filters = $request->validate([
++            'q' => 'nullable|string|max:100', 'status' => 'nullable|in:active,inactive',
++            'market_id' => 'nullable|integer|exists:markets,id',
++        ]);
++        $query = MarketSection::with('market')->withStallCounts()->orderBy('market_id')->inDisplayOrder();
++        if (!empty($filters['market_id'])) {
++            $query->where('market_id', $filters['market_id']);
++        }
++        if (!empty($filters['status'])) {
++            $query->where('status', $filters['status']);
++        }
++        if ($request->filled('q')) {
++            $query->where(function ($sections) use ($filters) {
++                $match = '%'.$filters['q'].'%';
++                $sections->where('name', 'like', $match)->orWhere('code', 'like', $match);
++            });
++        }
++        $records = $query->paginate(20)->withQueryString();
++        $markets = Market::orderBy('name')->get();
++        $orderable = collect();
++        if (!empty($filters['market_id']) && !$request->anyFilled(['q', 'status']) && $request->user()->can('sections.manage')) {
++            $orderable = MarketSection::where('market_id', $filters['market_id'])->inDisplayOrder()->limit(2001)->get();
++        }
++        return view('sections.index', compact('records', 'markets', 'filters', 'orderable'));
++    }
++
++    public function reorderSections(Request $request, SectionService $service)
++    {
++        $this->authorize('sections.manage');
++        $data = $request->validate(['market_id' => 'required|integer', 'ids' => 'required|array|max:2000']);
++        $service->reorder($request->user(), $data['market_id'], $data['ids']);
++        return redirect()->route('records.index', ['type' => 'sections', 'market_id' => $data['market_id']])
++            ->with('success', 'Section order saved.');
++    }
++
++    public function stallSectionOptions(Market $market)
++    {
++        $this->authorize('stalls.manage');
++        return response()->json($market->sections()->where('status', 'active')->inDisplayOrder()->get(['id', 'name', 'code']))
++            ->header('Cache-Control', 'private, no-store');
+     }
+     public function create($type)
+     {
+         if ($type === 'tenants') {
+             return app(TenantController::class)->create();
+         }
+         if ($type === 'businesses') {
+             $this->authorize('tenants.manage');
+             if (request()->filled('tenant_id')) {
+                 return redirect()->route('tenant-businesses.create',Tenant::findOrFail(request('tenant_id')));
+             }
+             return redirect()->route('tenant-businesses.index');
+         }
+         $spec = Resources::get($type);
+         $this->authorize($spec["permission"] . ".manage");
+-        return $this->form($type, new ($spec["model"])());
++        $record = new ($spec["model"])();
++        if (in_array($type, ['sections', 'stalls'], true) && is_numeric(request('market_id'))) {
++            $record->market_id = (int) request('market_id');
++        }
++        return $this->form($type, $record);
+     }
+     public function edit($type, $id)
+     {
+         if ($type === 'tenants') {
+             return app(TenantController::class)->edit(request(), $id);
+         }
+         if ($type === 'businesses') {
+             $this->authorize('tenants.manage');
+             $business = Business::findOrFail($id);
+             return $business->tenant ? redirect()->route('tenant-businesses.edit',[$business->tenant,$business]) : redirect()->route('tenant-businesses.index',['orphaned'=>1]);
+         }
+         $spec = Resources::get($type);
+         $model = $spec["model"]::findOrFail($id);
+         $this->authorize("update", $model);
+         return $this->form($type, $model);
+     }
+     private function form($type, $record)
+     {
++        if ($type === 'sections') {
++            $markets = Market::orderBy('name')->get();
++            $fromStall = !$record->exists && request()->boolean('from_stall');
++            return view('sections.form', compact('record', 'markets', 'fromStall'));
++        }
+         $spec = Resources::get($type);
+         $options = [];
++        $retainedSection = null;
+         foreach ($spec["fields"] as $field => $meta) {
+-            if ($meta[1] === "relation") {
++            if ($type === 'stalls' && $field === 'market_section_id') {
++                $marketId = old('market_id', $record->market_id);
++                $options[$field] = is_numeric($marketId)
++                    ? MarketSection::where('market_id', $marketId)->where('status', 'active')->inDisplayOrder()->get()
++                    : collect();
++                $current = $record->exists ? $record->section : null;
++                if ($current && $current->status === 'inactive' && (int) $current->market_id === (int) $record->market_id) {
++                    $retainedSection = $current;
++                }
++            } elseif ($meta[1] === "relation") {
+                 $options[$field] = $meta[2]::orderBy("id")->get();
+             }
+         }
+-        return view("records.form", compact("type", "spec", "record", "options"));
++        return view("records.form", compact("type", "spec", "record", "options", 'retainedSection'));
+     }
+     public function store(RecordRequest $request, $type)
+     {
+         return $this->save($request, $type, null);
+     }
+     public function update(RecordRequest $request, $type, $id)
+     {
+         return $this->save($request, $type, $id);
+     }
+     private function save($request, $type, $id)
+     {
+         if ($type === 'tenants') {
+             return app(TenantController::class)->save($request, $id);
+         }
+         if ($type === 'businesses') {
+             $business = app(\App\Services\BusinessService::class)->save($request->user(),$request->validated(),$id);
+             return redirect()->route('records.show',['type'=>'tenants','id'=>$business->tenant_id,'tab'=>'businesses'])->with('success','Business saved in Tenant Management.');
+         }
+         $spec = Resources::get($type);
+         $d = $request->validated();
++        if ($type === 'sections') {
++            $section = app(SectionService::class)->save($request->user(), $d, $id);
++            if ($id === null && $request->boolean('from_stall')) {
++                return redirect()->route('records.show', ['type' => 'sections', 'id' => $section->id, 'from_stall' => 1])
++                    ->with('success', 'Section saved. Return to the stall tab and refresh the section choices.');
++            }
++            return redirect()->route('records.index', ['type' => 'sections', 'market_id' => $section->market_id])
++                ->with('success', 'Section saved.');
++        }
+         $reason = $d['change_reason'] ?? null;
+         unset($d['change_reason']);
+-        $record = DB::transaction(function () use ($spec, $d, $id, $type, $request, $reason) {
++        $originalStallMarket = $type === 'stalls' && $id ? Stall::findOrFail($id)->market_id : null;
++        $record = DB::transaction(function () use ($spec, $d, $id, $type, $request, $reason, $originalStallMarket) {
+             // Lock parents before child writes, matching occupancy service lock order.
+             if (isset($d["tenant_id"])) {
+                 Tenant::whereKey($d["tenant_id"])->lockForUpdate()->firstOrFail();
+             }
+-            if (isset($d["market_id"])) {
++            if ($type === 'stalls') {
++                Market::whereIn('id', array_filter([$originalStallMarket, $d['market_id']]))->orderBy('id')->lockForUpdate()->get();
++            } elseif (isset($d["market_id"])) {
+                 Market::whereKey($d["market_id"])->lockForUpdate()->firstOrFail();
+             }
+             $m = $id
+                 ? $spec["model"]::whereKey($id)->lockForUpdate()->firstOrFail()
+                 : new ($spec["model"])();
+             $old = $m->getAttributes();
+             if ($id) {
+                 $this->authorize("update", $m);
+             }
+             if ($type === "stalls") {
++                if ($id && (int) $originalStallMarket !== (int) $m->market_id) {
++                    throw ValidationException::withMessages(['market_id' => 'The stall market changed. Reload the record and try again.']);
++                }
++                $section = MarketSection::whereKey($d['market_section_id'])->where('market_id', $d['market_id'])->lockForUpdate()->first();
++                $retainingSection = $id && (int) $m->market_id === (int) $d['market_id']
++                    && (int) $m->market_section_id === (int) $d['market_section_id'];
++                if (!$section || ($section->status !== 'active' && !$retainingSection)) {
++                    throw ValidationException::withMessages(['market_section_id' => 'Choose an active section in this market.']);
++                }
+                 if ($id && $m->assignments()->exists()) {
+                     if (bccomp((string)$m->area,(string)$d['area'],2) !== 0 || (array_key_exists('location_type',$d) && $m->location_type !== $d['location_type'])) {
+                         $this->check(is_string($reason) && mb_strlen(trim($reason)) >= 5,'Explain the verified area or location correction. Historical assessments will retain their original values.');
+                     }
+                     $this->check(
+                         $m->market_id == $d["market_id"] &&
+                             $m->market_section_id == $d["market_section_id"] &&
+                             $m->classification === $d["classification"],
+                         "Stalls with history cannot move market/section or change classification.",
+                     );
+                 }
+                 if ($id && $m->currentAssignment) {
+                     $this->check(
+                         $d["status"] === "occupied",
+                         "End the active assignment before changing occupancy.",
+                     );
+                 }
+                 $d["created_by"] = $id ? $m->created_by : $request->user()->id;
+                 $d["updated_by"] = $request->user()->id;
+             }
+-            if ($type === "sections" && $id && Stall::where("market_section_id", $id)->exists()) {
+-                $this->check(
+-                    $m->market_id == $d["market_id"],
+-                    "A section containing stalls cannot change market.",
+-                );
+-            }
+             if ($type === "tenants" && ($d["status"] ?? "") === "inactive") {
+                 $this->check(
+                     !StallAssignment::where("tenant_id", $id)->where("status", "active")->exists(),
+                     "End active assignments before archiving this tenant.",
+                 );
+             }
+-            if (in_array($type, ["markets", "sections"]) && ($d["status"] ?? "") === "inactive") {
+-                $q = Stall::where(
+-                    $type === "markets" ? "market_id" : "market_section_id",
+-                    $id,
+-                )->where("status", "occupied");
++            if ($type === 'markets' && ($d['status'] ?? '') === 'inactive') {
++                $q = Stall::where('market_id', $id)->where('status', 'occupied');
+                 $this->check(
+                     !$q->exists(),
+                     "End occupied assignments before deactivating this location.",
+                 );
+             }
+             if ($type === "rates") {
+                 if ($id && RentalAgreement::where("rental_rate_id", $id)->exists()) {
+                     $this->check(
+                         $m->market_id == $d["market_id"] &&
+                             $m->classification === $d["classification"] &&
+@@ -232,20 +319,25 @@
+     {
+         if ($type === 'tenants') {
+             return app(TenantController::class)->show($id);
+         }
+         if ($type === 'businesses') {
+             $this->authorize('tenants.view');
+             $business = Business::findOrFail($id);
+             return $business->tenant ? redirect()->route('records.show',['type'=>'tenants','id'=>$business->tenant_id,'tab'=>'businesses']) : redirect()->route('tenant-businesses.index',['orphaned'=>1]);
+         }
+         $spec = Resources::get($type);
++        if ($type === 'sections') {
++            $this->authorize('sections.view');
++            $record = MarketSection::with('market')->withStallCounts()->findOrFail($id);
++            return view('sections.show', compact('record'));
++        }
+         $record = $spec["model"]::findOrFail($id);
+         $this->authorize("view", $record);
+         if ($type === 'stalls') {
+             $record->load('currentAssignment.tenant','currentAssignment.business.businessCategory','currentAssignment.agreement.assessment');
+         }
+         return view("records.show", compact("type", "spec", "record"));
+     }
+     private function check($ok, $message)
+     {
+         if (!$ok) {
+--- before/app/Http/Controllers/TenantController.php
++++ after/app/Http/Controllers/TenantController.php
+@@ -190,21 +190,21 @@
+                 return array_filter((array)$helper, $scalarFields);
+             }, $helpers);
+         }
+         return $rows;
+     }
+ 
+     private function eligibleStalls()
+     {
+         return Stall::query()->whereIn('status', ['vacant','reserved'])->whereIn('location_type', ['inner','outer'])
+             ->where('area', '>', 0)->whereHas('market', function ($market) { $market->where('status','active'); })
+-            ->whereHas('section', function ($section) { $section->where('status','active'); });
++            ->inActiveSection();
+     }
+ 
+     public function save($request, $id = null)
+     {
+         $service = app(TenantDataService::class);
+         $tenant = $service->save($request->user(), $request->validated(), $id);
+         $response = redirect()->route('records.show', ['tenants',$tenant->id]);
+         if (($request->input('registration_action') || !$id) && $service->hasDuplicate($tenant)) {
+             $response->with('duplicate_warning', 'Another tenant has a similar name, account number or phone. Review the tenant list before making any record corrections.');
+         }
+--- before/app/Http/Requests/RecordRequest.php
++++ after/app/Http/Requests/RecordRequest.php
+@@ -1,31 +1,35 @@
+ <?php
+ namespace App\Http\Requests;
+ use App\Support\Resources;
++use App\Services\SectionService;
+ use Illuminate\Foundation\Http\FormRequest;
+ use Illuminate\Validation\Rule;
+ class RecordRequest extends FormRequest
+ {
+     public function authorize()
+     {
+         return $this->user() &&
+             $this->user()->active &&
+             $this->user()->can(Resources::get($this->route("type"))["permission"] . ".manage");
+     }
+     public function rules()
+     {
+         $type = $this->route("type");
+         if ($type === 'tenants') {
+             return TenantRequest::tenantRules($this);
+         }
+         if ($type === 'businesses') {
+             return BusinessRequest::businessRules($this, false);
++        }
++        if ($type === 'sections') {
++            return SectionService::rules();
+         }
+         $id = $this->route("id");
+         $rules = [];
+         $spec = Resources::get($type);
+         foreach ($spec["fields"] as $field => $meta) {
+             $rules[$field] = "nullable|string|max:255";
+             if ($meta[1] === "textarea") {
+                 $rules[$field] = "nullable|string|max:2000";
+             }
+             if ($meta[1] === "date") {
+@@ -49,30 +53,20 @@
+             if (isset($rules[$field])) {
+                 $rules[$field] = str_replace("nullable", "required", $rules[$field]);
+             }
+         }
+         if ($type === "markets") {
+             $rules["code"] = [
+                 "required",
+                 "string",
+                 "max:40",
+                 Rule::unique("markets", "code")->ignore($id),
+-            ];
+-        }
+-        if ($type === "sections") {
+-            $rules["code"] = [
+-                "required",
+-                "string",
+-                "max:40",
+-                Rule::unique("market_sections", "code")
+-                    ->where("market_id", $this->market_id)
+-                    ->ignore($id),
+             ];
+         }
+         if ($type === "stalls") {
+             $rules['location_type'] = [$id ? 'nullable' : 'required', Rule::in(['inner','outer'])];
+             $rules['change_reason'] = 'nullable|string|min:5|max:1000';
+             $rules["code"] = [
+                 "required",
+                 "string",
+                 "max:40",
+                 Rule::unique("stalls", "code")->where("market_id", $this->market_id)->ignore($id),
+--- before/app/Models/MarketSection.php
++++ after/app/Models/MarketSection.php
+@@ -1,11 +1,39 @@
+ <?php
+ namespace App\Models;
+ use Illuminate\Database\Eloquent\Model;
+ class MarketSection extends Model
+ {
++    public const STALL_STATUSES = ['occupied', 'vacant', 'reserved', 'maintenance', 'inactive'];
++
+     protected $guarded = ["id"];
++    protected $casts = ['sort_order' => 'integer'];
++
+     public function market()
+     {
+         return $this->belongsTo(Market::class);
+     }
++
++    public function stalls()
++    {
++        return $this->hasMany(Stall::class);
++    }
++
++    public function scopeInDisplayOrder($query)
++    {
++        return $query->orderBy('sort_order')->orderBy('name')->orderBy('id');
++    }
++
++    public function scopeWithStallCounts($query)
++    {
++        $inMarket = function ($stalls) {
++            return $stalls->whereColumn('stalls.market_id', 'market_sections.market_id');
++        };
++        $counts = ['stalls' => $inMarket];
++        foreach (self::STALL_STATUSES as $status) {
++            $counts['stalls as '.$status.'_count'] = function ($stalls) use ($inMarket, $status) {
++                return $inMarket($stalls)->where('stalls.status', $status);
++            };
++        }
++        return $query->withCount($counts);
++    }
+ }
+--- before/app/Models/Stall.php
++++ after/app/Models/Stall.php
+@@ -5,20 +5,26 @@
+ {
+     protected $guarded = ["id"];
+     protected $casts = ['area' => 'decimal:2'];
+     public function market()
+     {
+         return $this->belongsTo(Market::class);
+     }
+     public function section()
+     {
+         return $this->belongsTo(MarketSection::class, "market_section_id");
++    }
++    public function scopeInActiveSection($query)
++    {
++        return $query->whereHas('section', function ($section) {
++            $section->where('market_sections.status', 'active')->whereColumn('market_sections.market_id', 'stalls.market_id');
++        });
+     }
+     public function category()
+     {
+         return $this->belongsTo(StallCategory::class, "stall_category_id");
+     }
+     public function assignments()
+     {
+         return $this->hasMany(StallAssignment::class);
+     }
+     public function currentAssignment()
+--- before/app/Policies/RecordPolicy.php
++++ after/app/Policies/RecordPolicy.php
+@@ -1,21 +1,21 @@
+ <?php
+ namespace App\Policies;
+ use App\Models\User;
+ class RecordPolicy
+ {
+     private function family($model)
+     {
+         $name = is_string($model) ? class_basename($model) : class_basename(get_class($model));
+         return [
+             "Market" => "markets",
+-            "MarketSection" => "markets",
++            "MarketSection" => "sections",
+             "MarketLayout" => "markets",
+             "Stall" => "stalls",
+             "StallCategory" => "stalls",
+             "StallLayoutPosition" => "stalls",
+             "Tenant" => "tenants",
+             "Business" => "tenants",
+             "StallAssignment" => "assignments",
+             "RentalAgreement" => "assignments",
+             "RentalRate" => "rates",
+             "RentalBill" => "billing",
+@@ -25,13 +25,13 @@
+     public function view(User $u, $m)
+     {
+         return $u->active && $u->can($this->family($m) . ".view");
+     }
+     public function update(User $u, $m)
+     {
+         return $u->active && $u->can($this->family($m) . ".manage");
+     }
+     public function delete(User $u, $m)
+     {
+-        return $this->update($u, $m);
++        return $this->family($m) !== 'sections' && $this->update($u, $m);
+     }
+ }
+--- before/app/Services/AssignmentService.php
++++ after/app/Services/AssignmentService.php
+@@ -21,24 +21,23 @@
+             "concurrent_authorization_reason" => "nullable|required_with:concurrent_authorization_reference|string|min:5|max:1000",
+             "helpers" => "nullable|array|max:2",
+         ])->validate();
+         return DB::transaction(function () use ($actor, $d) {
+             $tenant = Tenant::whereKey($d["tenant_id"])->lockForUpdate()->firstOrFail();
+             $stall = Stall::whereKey($d["stall_id"])->lockForUpdate()->firstOrFail();
+             $this->check(
+                 $tenant->status === "active" && in_array($stall->status, ["vacant", "reserved"]),
+                 "Only active tenants and vacant/reserved stalls may be assigned.",
+             );
+-            $this->check(
+-                $stall->market->status === "active" && $stall->section->status === "active",
+-                "Market and section must be active.",
+-            );
++            $this->check($stall->market->status === 'active' && $stall->section
++                && (int) $stall->section->market_id === (int) $stall->market_id && $stall->section->status === 'active',
++                'Market and section must be active.');
+             $business = Business::whereKey($d["business_id"])->lockForUpdate()->firstOrFail();
+             $this->check((int) $business->tenant_id === (int) $tenant->id && $business->status === "active",
+                 "Business does not belong to this tenant or is inactive.");
+             $goodsLength = mb_strlen(trim((string)$business->permitted_goods));
+             if ($goodsLength < 1 || $goodsLength > 180) {
+                 throw ValidationException::withMessages(['business_id'=>'Before confirming an assignment, record verified permitted goods of 1–180 characters in its business record. Incomplete registration can remain a draft.']);
+             }
+             $end = $d["end_date"] ?? "9999-12-31";
+             $conflict = $this->overlapping($stall->assignments(), $d["start_date"], $end)->lockForUpdate()->exists();
+             $this->check(!$conflict, "Assignment dates overlap an existing occupancy.");
+@@ -90,21 +89,26 @@
+ 
+     private function authorizeConcurrency(Tenant $tenant, Stall $stall, array $data, $end): void
+     {
+         // The tenant lock serializes concurrency checks. Acquire involved market locks in ascending ID order.
+         $other = $this->overlapping(
+             StallAssignment::where("tenant_id", $tenant->id)->where("status", "active"),
+             $data["start_date"],
+             $end,
+         )->lockForUpdate()->get(["id", "stall_id"]);
+         $markets = $other->load("stall:id,market_id")->pluck("stall.market_id")->push($stall->market_id)->unique();
+-        Market::whereIn("id", $markets)->orderBy("id")->lockForUpdate()->get(["id"]);
++        $lockedMarkets = Market::whereIn('id', $markets)->orderBy('id')->lockForUpdate()->get(['id', 'status']);
++        $section = $stall->section()->where('market_id', $stall->market_id)->lockForUpdate()->first();
++        $this->check(
++            $lockedMarkets->firstWhere('id', $stall->market_id)->status === 'active' && $section && $section->status === 'active',
++            'Market and section must be active.',
++        );
+         if ($other->isEmpty()) {
+             return;
+         }
+         $this->check(trim($data["concurrent_authorization_reference"] ?? "") !== "" &&
+             mb_strlen(trim($data["concurrent_authorization_reason"] ?? "")) >= 5,
+             "Supply a reference and reason authorizing the concurrent assignments.");
+         $calculation = app(RentalCalculationService::class);
+         foreach ($markets->sort() as $marketId) {
+             $policy = $calculation->marketPolicy($marketId, $data["start_date"]);
+             $this->check($policy->max_concurrent_assignments >= $other->count() + 1,
+--- before/app/Services/Audit.php
++++ after/app/Services/Audit.php
+@@ -4,44 +4,49 @@
+ class Audit
+ {
+     public static function record(
+         $actor,
+         $action,
+         $entity = null,
+         array $old = [],
+         array $new = [],
+         $reason = null
+     ) {
+-        // Record identifiers and changed field names; do not duplicate tenant PII or secrets.
++        $safeFields = array_flip(self::safeFields());
++        if ($entity instanceof \App\Models\MarketSection) {
++            $safeFields += array_flip(['market_id', 'code', 'name', 'color']);
++        } elseif ($entity instanceof \App\Models\Stall) {
++            $safeFields += array_flip(['market_id', 'market_section_id']);
++        }
+         return AuditLog::create([
+             "actor_id" => $actor ? $actor->id : null,
+             "action" => $action,
+             "entity_type" => $entity ? class_basename($entity) : null,
+             "entity_id" => $entity ? $entity->id : null,
+             "old_values" => array_intersect_key(
+                 $old,
+-                array_flip(self::safeFields()),
++                $safeFields,
+             ),
+             "new_values" =>
+                 [
+                     "changed_fields" => array_values(
+                         array_diff(array_keys($new), [
+                             "password",
+                             "remember_token",
+                             "request_hash",
+                             "idempotency_key",
+                         ]),
+                     ),
+                 ] +
+                 array_intersect_key(
+                     $new,
+-                    array_flip(self::safeFields()),
++                    $safeFields,
+                 ),
+             "ip_address" => app()->runningInConsole() ? null : request()->ip(),
+             "reason" => $reason,
+         ]);
+     }
+     private static function safeFields()
+     {
+         return ['status','amount','start_date','end_date','monthly_amount','business_category_id','location_type','area','floor_area','minimum_rate','maximum_rate','effective_from','effective_until','daily_cusa','billing_day_rule','fixed_billing_days','max_concurrent_assignments','advance_deposit_authorized','is_active','sort_order','reference_document','approved_by','approved_at','rental_assessment_id'];
+     }
+ }
+--- before/app/Services/SectionService.php
++++ after/app/Services/SectionService.php
+@@ -0,0 +1,123 @@
++<?php
++
++namespace App\Services;
++
++use App\Models\{Market, MarketSection, User};
++use Illuminate\Auth\Access\AuthorizationException;
++use Illuminate\Support\Facades\{DB, Validator};
++use Illuminate\Validation\ValidationException;
++
++class SectionService
++{
++    public static function rules(): array
++    {
++        return [
++            'market_id' => 'required|integer|exists:markets,id',
++            'code' => 'required|string|max:40',
++            'name' => 'required|string|max:255',
++            'description' => 'nullable|string|max:2000',
++            'color' => ['nullable', 'string', 'regex:/\A#[0-9a-fA-F]{6}\z/'],
++            'sort_order' => 'sometimes|required|integer|min:0|max:999999',
++            'status' => 'required|in:active,inactive',
++        ];
++    }
++
++    public function save(User $actor, array $data, $id = null): MarketSection
++    {
++        $this->authorize($actor);
++        $data = Validator::make($data, self::rules())->validate();
++        $data['code'] = trim($data['code']);
++        $data['name'] = trim($data['name']);
++        $normalizedName = self::normalizedName($data['name']);
++        if ($normalizedName === '' || $data['code'] === '') {
++            throw ValidationException::withMessages($normalizedName === ''
++                ? ['name' => 'Enter a section name.'] : ['code' => 'Enter a section code.']);
++        }
++        $originalMarket = $id === null ? $data['market_id'] : MarketSection::findOrFail($id)->market_id;
++
++        return DB::transaction(function () use ($actor, $data, $id, $normalizedName, $originalMarket) {
++            $markets = Market::whereIn('id', [$originalMarket, $data['market_id']])->orderBy('id')->lockForUpdate()->get();
++            abort_unless($markets->contains('id', $data['market_id']), 404);
++            $section = $id === null ? new MarketSection() : MarketSection::lockForUpdate()->findOrFail($id);
++            if ($section->exists && (int) $section->market_id !== (int) $originalMarket) {
++                throw ValidationException::withMessages(['market_id' => 'The section market changed. Reload the record and try again.']);
++            }
++            $moving = $section->exists && (int) $section->market_id !== (int) $data['market_id'];
++            if ($moving && $section->stalls()->exists()) {
++                throw ValidationException::withMessages(['market_id' => 'A section containing stalls cannot change market.']);
++            }
++            if ($section->exists && $section->status !== 'inactive' && $data['status'] === 'inactive'
++                && $section->stalls()->where('status', 'occupied')->exists()) {
++                throw ValidationException::withMessages(['status' => 'End occupied assignments before deactivating this section.']);
++            }
++
++            $others = MarketSection::where('market_id', $data['market_id']);
++            if ($section->exists) {
++                $others->where('id', '!=', $section->id);
++                if ($data['code'] === trim($section->code)) {
++                    $data['code'] = $section->code;
++                }
++            }
++            if ((clone $others)->where('code', $data['code'])->lockForUpdate()->first(['id'])) {
++                throw ValidationException::withMessages(['code' => 'This code is already used in the selected market.']);
++            }
++            // Preserve original spelling, including whitespace trimmed during HTTP input processing.
++            if (!$moving && $section->exists && $data['name'] === trim($section->name)) {
++                $data['name'] = $section->name;
++            } elseif ($others->lockForUpdate()->pluck('name')->contains(function ($name) use ($normalizedName) {
++                return self::normalizedName($name) === $normalizedName;
++            })) {
++                throw ValidationException::withMessages(['name' => 'This section name is already used in the selected market.']);
++            }
++            $before = $section->getAttributes();
++            $section->fill($data);
++            if (!$section->exists) {
++                $section->created_by = $actor->id;
++            }
++            $section->updated_by = $actor->id;
++            $section->save();
++            Audit::record($actor, $id === null ? 'sections.created' : 'sections.updated', $section, $before, $section->getAttributes());
++            return $section;
++        }, 3);
++    }
++
++    public function reorder(User $actor, $marketId, array $ids): void
++    {
++        $this->authorize($actor);
++        Validator::make(['market_id' => $marketId, 'ids' => $ids], [
++            'market_id' => 'required|integer|exists:markets,id',
++            'ids' => 'required|array|min:1|max:2000',
++            'ids.*' => 'required|integer|distinct|min:1',
++        ])->validate();
++
++        DB::transaction(function () use ($actor, $marketId, $ids) {
++            $market = Market::lockForUpdate()->findOrFail($marketId);
++            $sections = $market->sections()->lockForUpdate()->get()->keyBy('id');
++            if ($sections->count() !== count($ids) || $sections->keys()->diff($ids)->isNotEmpty()) {
++                throw ValidationException::withMessages(['ids' => 'Submit every section in this market exactly once. Reload the order if sections changed.']);
++            }
++            foreach (array_values($ids) as $index => $id) {
++                $section = $sections->get($id);
++                $order = $index + 1;
++                if ($section->sort_order === $order) {
++                    continue;
++                }
++                $before = ['sort_order' => $section->sort_order];
++                $section->update(['sort_order' => $order, 'updated_by' => $actor->id]);
++                Audit::record($actor, 'sections.reordered', $section, $before, ['sort_order' => $order]);
++            }
++        }, 3);
++    }
++
++    public static function normalizedName(string $name): string
++    {
++        return mb_convert_case(trim(preg_replace('/[\p{Z}\s]+/u', ' ', $name)), MB_CASE_FOLD, 'UTF-8');
++    }
++
++    private function authorize(User $actor): void
++    {
++        if (!$actor->active || !$actor->can('sections.manage')) {
++            throw new AuthorizationException();
++        }
++    }
++}
+--- before/app/Support/Resources.php
++++ after/app/Support/Resources.php
+@@ -18,32 +18,21 @@
+                     "status" => [
+                         "Status",
+                         "select",
+                         ["active" => "Active", "inactive" => "Inactive"],
+                     ],
+                 ],
+             ],
+             "sections" => [
+                 "label" => "Sections",
+                 "model" => MarketSection::class,
+-                "permission" => "markets",
+-                "search" => "name",
+-                "fields" => [
+-                    "market_id" => ["Market", "relation", Market::class],
+-                    "code" => ["Section code", "text"],
+-                    "name" => ["Section name", "text"],
+-                    "status" => [
+-                        "Status",
+-                        "select",
+-                        ["active" => "Active", "inactive" => "Inactive"],
+-                    ],
+-                ],
++                "permission" => "sections",
+             ],
+             "categories" => [
+                 "label" => "Stall categories",
+                 "model" => StallCategory::class,
+                 "permission" => "stalls",
+                 "search" => "name",
+                 "fields" => ["name" => ["Category name", "text"]],
+             ],
+             "stalls" => [
+                 "label" => "Stalls",
+--- before/config/navigation.php
++++ after/config/navigation.php
+@@ -221,21 +221,21 @@
+                 "label" => "Contract Templates",
+                 "route" => "contract-templates.index",
+                 "permission" => "contract_templates.manage",
+                 "params" => [],
+                 "icon" => "receipt",
+                 "active" => ["contract-templates.*"],
+             ],
+             [
+                 "label" => "Market Sections",
+                 "route" => "records.index",
+-                "permission" => "markets.view",
++                "permission" => "sections.view",
+                 "params" => ["type" => "sections"],
+                 "icon" => "market",
+                 "active" => ["records.*"],
+             ],
+             [
+                 "label" => "Stall Categories",
+                 "route" => "records.index",
+                 "permission" => "stalls.view",
+                 "params" => ["type" => "categories"],
+                 "icon" => "grid",
+--- before/database/migrations/2026_11_19_000001_enhance_market_sections.php
++++ after/database/migrations/2026_11_19_000001_enhance_market_sections.php
+@@ -0,0 +1,28 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++class EnhanceMarketSections extends Migration
++{
++    public function up()
++    {
++        Schema::table('market_sections', function (Blueprint $table) {
++            $table->text('description')->nullable();
++            $table->string('color', 7)->nullable();
++            $table->unsignedInteger('sort_order')->default(0);
++            $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
++            $table->foreignId('updated_by')->nullable()->constrained('users')->nullOnDelete();
++        });
++    }
++
++    public function down()
++    {
++        Schema::table('market_sections', function (Blueprint $table) {
++            $table->dropForeign(['created_by']);
++            $table->dropForeign(['updated_by']);
++            $table->dropColumn(['description', 'color', 'sort_order', 'created_by', 'updated_by']);
++        });
++    }
++}
+--- before/database/seeders/RoleSeeder.php
++++ after/database/seeders/RoleSeeder.php
+@@ -4,20 +4,22 @@
+ use Spatie\Permission\Models\{Role, Permission};
+ use Spatie\Permission\PermissionRegistrar;
+ class RoleSeeder extends Seeder
+ {
+     public const MATRIX = [
+         "Super Administrator" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
+             "markets.manage",
++            "sections.view",
++            "sections.manage",
+             "stalls.view",
+             "stalls.manage",
+             "tenants.view",
+             "tenants.manage",
+             "assignments.view",
+             "assignments.manage",
+             "rates.view",
+             "rates.manage",
+             "rates.approve",
+             "billing.view",
+@@ -35,90 +37,96 @@
+             "audit.view",
+             "staff.manage",
+             "settings.manage",
+             "financial.backdate",
+         ],
+         "Market Administrator" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
+             "markets.manage",
++            "sections.view",
++            "sections.manage",
+             "stalls.view",
+             "stalls.manage",
+             "tenants.view",
+             "tenants.manage",
+             "assignments.view",
+             "assignments.manage",
+             "rates.view",
+             "rates.manage",
+             "billing.view",
+             "billing.generate",
+             "billing.post",
+             "payments.view",
+             "reports.view",
+             "reports.financial",
+             "reports.personal",
+         ],
+         "Market Staff" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
++            "sections.view",
+             "stalls.view",
+             "stalls.manage",
+             "tenants.view",
+             "tenants.manage",
+             "assignments.view",
+             "rates.view",
+             "billing.view",
+             "payments.view",
+             "reports.view",
+             "reports.personal",
+         ],
+         "Authorized Collection Officer" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
++            "sections.view",
+             "stalls.view",
+             "tenants.view",
+             "assignments.view",
+             "rates.view",
+             "billing.view",
+             "payments.view",
+             "payments.record",
+             "payments.post",
+             "reports.view",
+             "reports.financial",
+             "reports.personal",
+         ],
+         "Treasury/Accounting Officer" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
++            "sections.view",
+             "stalls.view",
+             "tenants.view",
+             "assignments.view",
+             "rates.view",
+             "billing.view",
+             "billing.adjust",
+             "payments.view",
+             "payments.reverse",
+             "payments.reconcile",
+             "reports.view",
+             "reports.financial",
+             "reports.personal",
+             "audit.view",
+             "financial.backdate",
+         ],
+         "LGU Management Viewer" => [
+             "dashboard.view",
+             "map.view",
+             "markets.view",
++            "sections.view",
+             "stalls.view",
+             "reports.view",
+         ],
+     ];
+     public function run()
+     {
+         app(PermissionRegistrar::class)->forgetCachedPermissions();
+         \Illuminate\Support\Facades\DB::transaction(function () {
+             $extra = [
+                 "Super Administrator" => [
+--- before/public/assets/app.css
++++ after/public/assets/app.css
+@@ -1 +1 @@
+-*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}body{--tw-bg-opacity:1;background-color:rgb(243 246 251/var(--tw-bg-opacity,1));color:rgb(30 41 59/var(--tw-text-opacity,1));-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-family:Segoe UI,Arial,sans-serif}body,h1{--tw-text-opacity:1}h1{font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.025em;color:rgb(17 37 63/var(--tw-text-opacity,1))}@media (min-width:1024px){h1{font-size:1.875rem;line-height:2.25rem}}h2{font-size:1.125rem;line-height:1.75rem}h2,h3{font-weight:600;--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}label{margin-bottom:.25rem;margin-top:.75rem;display:block;font-size:.875rem;line-height:1.25rem;font-weight:500;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}input:not([type=checkbox]),select,textarea{width:100%;border-radius:.5rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(203 213 225/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(15 23 42/var(--tw-text-opacity,1))}input[type=checkbox]{height:1rem;width:1rem;accent-color:#1d67d7}input,textarea{caret-color:#1d67d7}input::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}input::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}a{text-underline-offset:4px}::-moz-selection{background:#cfe1fb;color:#11253f}::selection{background:#cfe1fb;color:#11253f}td,th{font-variant-numeric:tabular-nums}.container{width:100%}@media (min-width:640px){.container{max-width:640px}}@media (min-width:768px){.container{max-width:768px}}@media (min-width:1024px){.container{max-width:1024px}}@media (min-width:1280px){.container{max-width:1280px}}@media (min-width:1536px){.container{max-width:1536px}}.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.5rem;--tw-bg-opacity:1;background-color:rgb(29 103 215/var(--tw-bg-opacity,1));padding:.625rem 1rem;font-size:.875rem;line-height:1.25rem;font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.btn:hover{--tw-bg-opacity:1;background-color:rgb(30 64 175/var(--tw-bg-opacity,1))}.btn:disabled{cursor:wait;opacity:.5}.btn{min-height:44px}.btn.secondary{--tw-bg-opacity:1;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.btn.secondary:hover{--tw-bg-opacity:1;background-color:rgb(219 234 254/var(--tw-bg-opacity,1))}.btn.danger{--tw-bg-opacity:1;background-color:rgb(254 242 242/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.btn.danger:hover{--tw-bg-opacity:1;background-color:rgb(254 226 226/var(--tw-bg-opacity,1))}.panel{border-radius:.75rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:1.25rem}@media (min-width:1024px){.panel{padding:1.5rem}}.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem}.toolbar label{margin-top:0}.toolbar>div{min-width:140px}.tablewrap{overflow-x:auto}.tablewrap table{width:100%;text-align:left;font-size:.875rem;line-height:1.25rem}.tablewrap th{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1));padding:.75rem;font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.025em;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.tablewrap td{border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding:.875rem .75rem;vertical-align:top}.tablewrap tbody tr:hover{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1))}.notice{margin-bottom:1.25rem;border-radius:.5rem;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));padding:.75rem 1rem;font-size:.875rem;line-height:1.25rem;color:rgb(30 58 138/var(--tw-text-opacity,1))}.notice,.notice.error{--tw-bg-opacity:1;--tw-text-opacity:1}.notice.error{background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.notice.success{--tw-bg-opacity:1;background-color:rgb(236 253 245/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(6 95 70/var(--tw-text-opacity,1))}.\!empty,.empty{padding:2rem;text-align:center;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.badge{display:inline-block;border-radius:9999px;--tw-bg-opacity:1;background-color:rgb(241 245 249/var(--tw-bg-opacity,1));padding:.25rem .625rem;font-size:.75rem;line-height:1rem;font-weight:600;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-occupied{border-color:rgb(167 243 208/var(--tw-border-opacity,1));background-color:rgb(236 253 245/var(--tw-bg-opacity,1));color:rgb(6 95 70/var(--tw-text-opacity,1))}.status-occupied,.status-vacant{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-vacant{border-color:rgb(203 213 225/var(--tw-border-opacity,1));background-color:rgb(241 245 249/var(--tw-bg-opacity,1));color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-reserved{border-color:rgb(252 211 77/var(--tw-border-opacity,1));background-color:rgb(255 251 235/var(--tw-bg-opacity,1));color:rgb(120 53 15/var(--tw-text-opacity,1))}.status-maintenance,.status-reserved{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-maintenance{border-color:rgb(254 202 202/var(--tw-border-opacity,1));background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.status-inactive{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink{display:block;border-radius:.5rem;padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(219 234 254/var(--tw-text-opacity,1))}.navlink.active,.navlink:hover{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink.active{font-weight:600}.navlink.\!active{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.detailrow{display:flex;justify-content:space-between;gap:1.25rem;border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding-top:.75rem;padding-bottom:.75rem;font-size:.875rem;line-height:1.25rem}.detailrow dt{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.detailrow dd{overflow-wrap:break-word;text-align:right;font-weight:500}.stall{min-height:76px;border-radius:.5rem;border-width:1px;padding:.75rem;text-align:center}.stall:hover,.stall[aria-pressed=true]{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000);--tw-ring-opacity:1;--tw-ring-color:rgb(29 103 215/var(--tw-ring-opacity,1))}.stall[aria-pressed=true]{--tw-ring-offset-width:2px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}.fixed{position:fixed}.col-span-full{grid-column:1/-1}.mx-auto{margin-left:auto;margin-right:auto}.my-3{margin-top:.75rem;margin-bottom:.75rem}.my-4{margin-top:1rem;margin-bottom:1rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}.ml-2{margin-left:.5rem}.mr-2{margin-right:.5rem}.mr-3{margin-right:.75rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-5{margin-top:1.25rem}.mt-6{margin-top:1.5rem}.mt-8{margin-top:2rem}.block{display:block}.inline-block{display:inline-block}.flex{display:flex}.inline-flex{display:inline-flex}.table{display:table}.grid{display:grid}.contents{display:contents}.hidden{display:none}.h-64{height:16rem}.min-h-11{min-height:2.75rem}.min-h-screen{min-height:100vh}.w-full{width:100%}.min-w-0{min-width:0}.min-w-48{min-width:12rem}.max-w-2xl{max-width:42rem}.max-w-3xl{max-width:48rem}.max-w-4xl{max-width:56rem}.max-w-5xl{max-width:64rem}.max-w-\[1600px\]{max-width:1600px}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.flex-1{flex:1 1 0%}.cursor-pointer{cursor:pointer}.scroll-mt-4{scroll-margin-top:1rem}.list-disc{list-style-type:disc}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-wrap{flex-wrap:wrap}.items-start{align-items:flex-start}.items-end{align-items:flex-end}.items-center{align-items:center}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:1.25rem}.gap-6{gap:1.5rem}.gap-x-4{-moz-column-gap:1rem;column-gap:1rem}.gap-x-6{-moz-column-gap:1.5rem;column-gap:1.5rem}.gap-y-1{row-gap:.25rem}.gap-y-2{row-gap:.5rem}.gap-y-3{row-gap:.75rem}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.space-y-5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1.25rem*var(--tw-space-y-reverse))}.divide-y>:not([hidden])~:not([hidden]){--tw-divide-y-reverse:0;border-top-width:calc(1px*(1 - var(--tw-divide-y-reverse)));border-bottom-width:calc(1px*var(--tw-divide-y-reverse))}.divide-slate-100>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(241 245 249/var(--tw-divide-opacity,1))}.overflow-x-auto{overflow-x:auto}.whitespace-nowrap{white-space:nowrap}.break-words{overflow-wrap:break-word}.rounded-2xl{border-radius:1rem}.border-b{border-bottom-width:1px}.border-b-2{border-bottom-width:2px}.border-t{border-top-width:1px}.border-blue-700{--tw-border-opacity:1;border-color:rgb(29 78 216/var(--tw-border-opacity,1))}.border-slate-200{--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1))}.border-transparent{border-color:transparent}.bg-navy{--tw-bg-opacity:1;background-color:rgb(17 37 63/var(--tw-bg-opacity,1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1))}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.p-8{padding:2rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}.pb-3{padding-bottom:.75rem}.pb-4{padding-bottom:1rem}.pl-5{padding-left:1.25rem}.pt-3{padding-top:.75rem}.pt-4{padding-top:1rem}.text-right{text-align:right}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-normal{font-weight:400}.font-semibold{font-weight:600}.tabular-nums{--tw-numeric-spacing:tabular-nums;font-variant-numeric:var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction)}.text-blue-800{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.text-blue-900{--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.text-navy{--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}.text-red-800{--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}.text-slate-600{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.text-slate-700{--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.underline{text-decoration-line:underline}.underline-offset-2{text-underline-offset:2px}.filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}@media print{.no-print,aside,header{display:none!important}main{margin:0!important;padding:0!important}.panel{border:0}}@media(prefers-reduced-motion:no-preference){.stall{transition:box-shadow .15s ease-out}.details-loaded{animation:detail-enter .18s ease-out}@keyframes detail-enter{0%{transform:translateX(6px)}to{transform:translateX(0)}}}.sidebar-shell{position:fixed;inset:0 auto 0 0;z-index:40;display:flex;flex-direction:column;width:min(19rem,calc(100vw - 3rem));background:#11253f;color:#fff;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 12px 30px rgba(17,37,63,.2)}.sidebar-open .sidebar-shell{transform:translateX(0)}.sidebar-overlay:not([hidden]){position:fixed;inset:0;z-index:30;background:rgba(15,23,42,.62)}.sidebar-brand{display:flex;align-items:center;gap:.5rem;flex:none;padding:1rem 1.1rem;border-bottom:1px solid #35506e;min-height:76px}.sidebar-brand-link{display:flex;align-items:center;gap:.75rem;min-width:0;color:#fff;text-decoration:none}.sidebar-mark{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;border-radius:.7rem;background:#1d67d7;font-size:.8rem;font-weight:800;letter-spacing:.03em}.sidebar-brand-text{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}.sidebar-brand-text strong{font-size:1.15rem}.sidebar-brand-text small{color:#c5d9f6;font-size:.72rem;margin-top:.2rem}.sidebar-close{margin-left:auto;min-width:44px;min-height:44px;border-radius:.5rem;font-size:1.6rem;color:#dbeafe}.sidebar-close:hover{background:#24466c}.sidebar-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:.75rem .7rem}.nav-group{border-bottom:1px solid #35506e;padding:.3rem 0}.nav-group:last-child{border:0}.nav-group-heading{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.5rem .65rem;border-radius:.55rem;color:#bcd4f4;cursor:pointer;font-size:.72rem;font-weight:700;letter-spacing:.075em;text-transform:uppercase;list-style:none}.nav-group-heading::-webkit-details-marker{display:none}.nav-group-heading:focus-visible,.nav-group-heading:hover{background:#24466c;color:#fff}.nav-group-label{flex:1;white-space:nowrap}.nav-chevron{font-size:1.2rem;line-height:1;transition:transform .2s}.nav-group[open] .nav-chevron{transform:rotate(180deg)}.nav-group-items{overflow:hidden}.nav-icon{width:1.2rem;height:1.2rem;flex:none}.navlink{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:.1rem 0;padding:.6rem .65rem .6rem 1rem;border-radius:.55rem;color:#dbeafe;text-decoration:none;font-size:.84rem;line-height:1.2}.navlink:hover{background:#24466c;color:#fff}.navlink.active{background:#2b5888;color:#fff;font-weight:700;box-shadow:inset 3px 0 #82b5ff}.nav-item-label{white-space:nowrap}.sidebar-account{flex:none;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:1rem 1.1rem;border-top:1px solid #35506e;background:#102138}.sidebar-avatar{display:grid;place-items:center;flex:none;width:2.3rem;height:2.3rem;border-radius:50%;background:#355b86;font-weight:700}.sidebar-account-text{min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.3}.sidebar-account-text small,.sidebar-account-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-account-text strong{font-size:.82rem}.sidebar-account-text small{color:#c5d9f6;font-size:.7rem}.sidebar-logout{width:100%}.sidebar-logout button{display:flex;align-items:center;gap:.75rem;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:.55rem;color:#dbeafe;font-size:.84rem}.sidebar-logout button:hover{background:#24466c;color:#fff}.sidebar-open{overflow:hidden}@media(min-width:1024px){.sidebar-shell{position:sticky;top:0;z:auto;width:16rem;height:100vh;flex:none;transform:none;box-shadow:none;transition:width .2s ease}.sidebar-overlay{display:none!important}.sidebar-close{display:none}.sidebar-compact .sidebar-shell{width:4.75rem}.sidebar-compact .sidebar-brand{justify-content:center;padding:.8rem}.sidebar-compact .nav-chevron,.sidebar-compact .nav-group-heading,.sidebar-compact .nav-group-label,.sidebar-compact .nav-item-label,.sidebar-compact .sidebar-account-text,.sidebar-compact .sidebar-brand-text{display:none}.sidebar-compact .sidebar-nav{padding:.7rem .45rem}.sidebar-compact .nav-group{padding:.2rem 0}.sidebar-compact .navlink{justify-content:center;padding:.7rem}.sidebar-compact .sidebar-account{justify-content:center;padding:.7rem .4rem}.sidebar-compact .sidebar-logout button{justify-content:center;padding:.55rem}}@media(max-width:1023px){.sidebar-shell{visibility:hidden}.sidebar-open .sidebar-shell{visibility:visible}}@media(prefers-reduced-motion:reduce){.nav-chevron,.sidebar-shell{transition:none!important}}.hover\:text-blue-800:hover{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.hover\:underline:hover{text-decoration-line:underline}.focus\:not-sr-only:focus{position:static;width:auto;height:auto;padding:0;margin:0;overflow:visible;clip:auto;white-space:normal}@media (min-width:640px){.sm\:col-span-2{grid-column:span 2/span 2}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (min-width:768px){.md\:col-span-2{grid-column:span 2/span 2}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.md\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:1024px){.lg\:flex{display:flex}.lg\:inline-flex{display:inline-flex}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:p-8{padding:2rem}.lg\:px-8{padding-left:2rem;padding-right:2rem}}@media (min-width:1280px){.xl\:sticky{position:sticky}.xl\:top-5{top:1.25rem}.xl\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}.xl\:grid-cols-\[minmax\(0\2c 1\.7fr\)_minmax\(300px\2c 1fr\)\]{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr)}}+*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}body{--tw-bg-opacity:1;background-color:rgb(243 246 251/var(--tw-bg-opacity,1));color:rgb(30 41 59/var(--tw-text-opacity,1));-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-family:Segoe UI,Arial,sans-serif}body,h1{--tw-text-opacity:1}h1{font-size:1.5rem;line-height:2rem;font-weight:700;letter-spacing:-.025em;color:rgb(17 37 63/var(--tw-text-opacity,1))}@media (min-width:1024px){h1{font-size:1.875rem;line-height:2.25rem}}h2{font-size:1.125rem;line-height:1.75rem}h2,h3{font-weight:600;--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}label{margin-bottom:.25rem;margin-top:.75rem;display:block;font-size:.875rem;line-height:1.25rem;font-weight:500;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}input:not([type=checkbox]),select,textarea{width:100%;border-radius:.5rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(203 213 225/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(15 23 42/var(--tw-text-opacity,1))}input[type=checkbox]{height:1rem;width:1rem;accent-color:#1d67d7}input,textarea{caret-color:#1d67d7}input::-moz-placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}input::placeholder{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}a{text-underline-offset:4px}::-moz-selection{background:#cfe1fb;color:#11253f}::selection{background:#cfe1fb;color:#11253f}td,th{font-variant-numeric:tabular-nums}.container{width:100%}@media (min-width:640px){.container{max-width:640px}}@media (min-width:768px){.container{max-width:768px}}@media (min-width:1024px){.container{max-width:1024px}}@media (min-width:1280px){.container{max-width:1280px}}@media (min-width:1536px){.container{max-width:1536px}}.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;border-radius:.5rem;--tw-bg-opacity:1;background-color:rgb(29 103 215/var(--tw-bg-opacity,1));padding:.625rem 1rem;font-size:.875rem;line-height:1.25rem;font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.btn:hover{--tw-bg-opacity:1;background-color:rgb(30 64 175/var(--tw-bg-opacity,1))}.btn:disabled{cursor:wait;opacity:.5}.btn{min-height:44px}.btn.secondary{--tw-bg-opacity:1;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.btn.secondary:hover{--tw-bg-opacity:1;background-color:rgb(219 234 254/var(--tw-bg-opacity,1))}.btn.danger{--tw-bg-opacity:1;background-color:rgb(254 242 242/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.btn.danger:hover{--tw-bg-opacity:1;background-color:rgb(254 226 226/var(--tw-bg-opacity,1))}.panel{border-radius:.75rem;border-width:1px;--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1));padding:1.25rem}@media (min-width:1024px){.panel{padding:1.5rem}}.toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.75rem}.toolbar label{margin-top:0}.toolbar>div{min-width:140px}.tablewrap{overflow-x:auto}.tablewrap table{width:100%;text-align:left;font-size:.875rem;line-height:1.25rem}.tablewrap th{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1));padding:.75rem;font-size:.75rem;line-height:1rem;font-weight:600;text-transform:uppercase;letter-spacing:.025em;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.tablewrap td{border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding:.875rem .75rem;vertical-align:top}.tablewrap tbody tr:hover{--tw-bg-opacity:1;background-color:rgb(248 250 252/var(--tw-bg-opacity,1))}.notice{margin-bottom:1.25rem;border-radius:.5rem;background-color:rgb(239 246 255/var(--tw-bg-opacity,1));padding:.75rem 1rem;font-size:.875rem;line-height:1.25rem;color:rgb(30 58 138/var(--tw-text-opacity,1))}.notice,.notice.error{--tw-bg-opacity:1;--tw-text-opacity:1}.notice.error{background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.notice.success{--tw-bg-opacity:1;background-color:rgb(236 253 245/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(6 95 70/var(--tw-text-opacity,1))}.\!empty,.empty{padding:2rem;text-align:center;--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.badge{display:inline-block;border-radius:9999px;--tw-bg-opacity:1;background-color:rgb(241 245 249/var(--tw-bg-opacity,1));padding:.25rem .625rem;font-size:.75rem;line-height:1rem;font-weight:600;--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-occupied{border-color:rgb(167 243 208/var(--tw-border-opacity,1));background-color:rgb(236 253 245/var(--tw-bg-opacity,1));color:rgb(6 95 70/var(--tw-text-opacity,1))}.status-occupied,.status-vacant{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-vacant{border-color:rgb(203 213 225/var(--tw-border-opacity,1));background-color:rgb(241 245 249/var(--tw-bg-opacity,1));color:rgb(51 65 85/var(--tw-text-opacity,1))}.status-reserved{border-color:rgb(252 211 77/var(--tw-border-opacity,1));background-color:rgb(255 251 235/var(--tw-bg-opacity,1));color:rgb(120 53 15/var(--tw-text-opacity,1))}.status-maintenance,.status-reserved{--tw-border-opacity:1;--tw-bg-opacity:1;--tw-text-opacity:1}.status-maintenance{border-color:rgb(254 202 202/var(--tw-border-opacity,1));background-color:rgb(254 242 242/var(--tw-bg-opacity,1));color:rgb(153 27 27/var(--tw-text-opacity,1))}.status-inactive{--tw-border-opacity:1;border-color:rgb(71 85 105/var(--tw-border-opacity,1));--tw-bg-opacity:1;background-color:rgb(51 65 85/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink{display:block;border-radius:.5rem;padding:.625rem .75rem;font-size:.875rem;line-height:1.25rem;--tw-text-opacity:1;color:rgb(219 234 254/var(--tw-text-opacity,1))}.navlink.active,.navlink:hover{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.navlink.active{font-weight:600}.navlink.\!active{--tw-bg-opacity:1;background-color:rgb(36 70 108/var(--tw-bg-opacity,1));font-weight:600;--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.detailrow{display:flex;justify-content:space-between;gap:1.25rem;border-bottom-width:1px;--tw-border-opacity:1;border-color:rgb(241 245 249/var(--tw-border-opacity,1));padding-top:.75rem;padding-bottom:.75rem;font-size:.875rem;line-height:1.25rem}.detailrow dt{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.detailrow dd{overflow-wrap:break-word;text-align:right;font-weight:500}.stall{min-height:76px;border-radius:.5rem;border-width:1px;padding:.75rem;text-align:center}.stall:hover,.stall[aria-pressed=true]{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000);--tw-ring-opacity:1;--tw-ring-color:rgb(29 103 215/var(--tw-ring-opacity,1))}.stall[aria-pressed=true]{--tw-ring-offset-width:2px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}.visible{visibility:visible}.fixed{position:fixed}.col-span-full{grid-column:1/-1}.mx-auto{margin-left:auto;margin-right:auto}.my-3{margin-top:.75rem;margin-bottom:.75rem}.my-4{margin-top:1rem;margin-bottom:1rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}.ml-2{margin-left:.5rem}.mr-2{margin-right:.5rem}.mr-3{margin-right:.75rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-5{margin-top:1.25rem}.mt-6{margin-top:1.5rem}.mt-8{margin-top:2rem}.block{display:block}.inline-block{display:inline-block}.flex{display:flex}.inline-flex{display:inline-flex}.table{display:table}.grid{display:grid}.contents{display:contents}.hidden{display:none}.h-3{height:.75rem}.h-64{height:16rem}.min-h-11{min-height:2.75rem}.min-h-screen{min-height:100vh}.w-3{width:.75rem}.w-full{width:100%}.min-w-0{min-width:0}.min-w-48{min-width:12rem}.max-w-2xl{max-width:42rem}.max-w-3xl{max-width:48rem}.max-w-4xl{max-width:56rem}.max-w-5xl{max-width:64rem}.max-w-\[1600px\]{max-width:1600px}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}.cursor-pointer{cursor:pointer}.scroll-mt-4{scroll-margin-top:1rem}.list-disc{list-style-type:disc}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-wrap{flex-wrap:wrap}.items-start{align-items:flex-start}.items-end{align-items:flex-end}.items-center{align-items:center}.items-baseline{align-items:baseline}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:1.25rem}.gap-6{gap:1.5rem}.gap-x-4{-moz-column-gap:1rem;column-gap:1rem}.gap-x-6{-moz-column-gap:1.5rem;column-gap:1.5rem}.gap-y-1{row-gap:.25rem}.gap-y-2{row-gap:.5rem}.gap-y-3{row-gap:.75rem}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.space-y-5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1.25rem*var(--tw-space-y-reverse))}.divide-y>:not([hidden])~:not([hidden]){--tw-divide-y-reverse:0;border-top-width:calc(1px*(1 - var(--tw-divide-y-reverse)));border-bottom-width:calc(1px*var(--tw-divide-y-reverse))}.divide-slate-100>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(241 245 249/var(--tw-divide-opacity,1))}.divide-slate-200>:not([hidden])~:not([hidden]){--tw-divide-opacity:1;border-color:rgb(226 232 240/var(--tw-divide-opacity,1))}.overflow-x-auto{overflow-x:auto}.whitespace-nowrap{white-space:nowrap}.whitespace-pre-line{white-space:pre-line}.break-words{overflow-wrap:break-word}.break-all{word-break:break-all}.rounded-2xl{border-radius:1rem}.rounded-full{border-radius:9999px}.border{border-width:1px}.border-b{border-bottom-width:1px}.border-b-2{border-bottom-width:2px}.border-t{border-top-width:1px}.border-blue-700{--tw-border-opacity:1;border-color:rgb(29 78 216/var(--tw-border-opacity,1))}.border-slate-200{--tw-border-opacity:1;border-color:rgb(226 232 240/var(--tw-border-opacity,1))}.border-slate-400{--tw-border-opacity:1;border-color:rgb(148 163 184/var(--tw-border-opacity,1))}.border-transparent{border-color:transparent}.bg-navy{--tw-bg-opacity:1;background-color:rgb(17 37 63/var(--tw-bg-opacity,1))}.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255/var(--tw-bg-opacity,1))}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.p-8{padding:2rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}.pb-3{padding-bottom:.75rem}.pb-4{padding-bottom:1rem}.pl-5{padding-left:1.25rem}.pt-3{padding-top:.75rem}.pt-4{padding-top:1rem}.text-right{text-align:right}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-normal{font-weight:400}.font-semibold{font-weight:600}.tabular-nums{--tw-numeric-spacing:tabular-nums;font-variant-numeric:var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction)}.text-blue-800{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.text-blue-900{--tw-text-opacity:1;color:rgb(30 58 138/var(--tw-text-opacity,1))}.text-navy{--tw-text-opacity:1;color:rgb(17 37 63/var(--tw-text-opacity,1))}.text-red-800{--tw-text-opacity:1;color:rgb(153 27 27/var(--tw-text-opacity,1))}.text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}.text-slate-600{--tw-text-opacity:1;color:rgb(71 85 105/var(--tw-text-opacity,1))}.text-slate-700{--tw-text-opacity:1;color:rgb(51 65 85/var(--tw-text-opacity,1))}.underline{text-decoration-line:underline}.underline-offset-2{text-underline-offset:2px}.filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}@media print{.no-print,aside,header{display:none!important}main{margin:0!important;padding:0!important}.panel{border:0}}@media(prefers-reduced-motion:no-preference){.stall{transition:box-shadow .15s ease-out}.details-loaded{animation:detail-enter .18s ease-out}@keyframes detail-enter{0%{transform:translateX(6px)}to{transform:translateX(0)}}}.sidebar-shell{position:fixed;inset:0 auto 0 0;z-index:40;display:flex;flex-direction:column;width:min(19rem,calc(100vw - 3rem));background:#11253f;color:#fff;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 12px 30px rgba(17,37,63,.2)}.sidebar-open .sidebar-shell{transform:translateX(0)}.sidebar-overlay:not([hidden]){position:fixed;inset:0;z-index:30;background:rgba(15,23,42,.62)}.sidebar-brand{display:flex;align-items:center;gap:.5rem;flex:none;padding:1rem 1.1rem;border-bottom:1px solid #35506e;min-height:76px}.sidebar-brand-link{display:flex;align-items:center;gap:.75rem;min-width:0;color:#fff;text-decoration:none}.sidebar-mark{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;border-radius:.7rem;background:#1d67d7;font-size:.8rem;font-weight:800;letter-spacing:.03em}.sidebar-brand-text{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}.sidebar-brand-text strong{font-size:1.15rem}.sidebar-brand-text small{color:#c5d9f6;font-size:.72rem;margin-top:.2rem}.sidebar-close{margin-left:auto;min-width:44px;min-height:44px;border-radius:.5rem;font-size:1.6rem;color:#dbeafe}.sidebar-close:hover{background:#24466c}.sidebar-nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:.75rem .7rem}.nav-group{border-bottom:1px solid #35506e;padding:.3rem 0}.nav-group:last-child{border:0}.nav-group-heading{display:flex;align-items:center;gap:.65rem;min-height:44px;padding:.5rem .65rem;border-radius:.55rem;color:#bcd4f4;cursor:pointer;font-size:.72rem;font-weight:700;letter-spacing:.075em;text-transform:uppercase;list-style:none}.nav-group-heading::-webkit-details-marker{display:none}.nav-group-heading:focus-visible,.nav-group-heading:hover{background:#24466c;color:#fff}.nav-group-label{flex:1;white-space:nowrap}.nav-chevron{font-size:1.2rem;line-height:1;transition:transform .2s}.nav-group[open] .nav-chevron{transform:rotate(180deg)}.nav-group-items{overflow:hidden}.nav-icon{width:1.2rem;height:1.2rem;flex:none}.navlink{display:flex;align-items:center;gap:.75rem;min-height:44px;margin:.1rem 0;padding:.6rem .65rem .6rem 1rem;border-radius:.55rem;color:#dbeafe;text-decoration:none;font-size:.84rem;line-height:1.2}.navlink:hover{background:#24466c;color:#fff}.navlink.active{background:#2b5888;color:#fff;font-weight:700;box-shadow:inset 3px 0 #82b5ff}.nav-item-label{white-space:nowrap}.sidebar-account{flex:none;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:1rem 1.1rem;border-top:1px solid #35506e;background:#102138}.sidebar-avatar{display:grid;place-items:center;flex:none;width:2.3rem;height:2.3rem;border-radius:50%;background:#355b86;font-weight:700}.sidebar-account-text{min-width:0;flex:1;display:flex;flex-direction:column;line-height:1.3}.sidebar-account-text small,.sidebar-account-text strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-account-text strong{font-size:.82rem}.sidebar-account-text small{color:#c5d9f6;font-size:.7rem}.sidebar-logout{width:100%}.sidebar-logout button{display:flex;align-items:center;gap:.75rem;width:100%;min-height:44px;padding:.55rem .7rem;border-radius:.55rem;color:#dbeafe;font-size:.84rem}.sidebar-logout button:hover{background:#24466c;color:#fff}.sidebar-open{overflow:hidden}@media(min-width:1024px){.sidebar-shell{position:sticky;top:0;z:auto;width:16rem;height:100vh;flex:none;transform:none;box-shadow:none;transition:width .2s ease}.sidebar-overlay{display:none!important}.sidebar-close{display:none}.sidebar-compact .sidebar-shell{width:4.75rem}.sidebar-compact .sidebar-brand{justify-content:center;padding:.8rem}.sidebar-compact .nav-chevron,.sidebar-compact .nav-group-heading,.sidebar-compact .nav-group-label,.sidebar-compact .nav-item-label,.sidebar-compact .sidebar-account-text,.sidebar-compact .sidebar-brand-text{display:none}.sidebar-compact .sidebar-nav{padding:.7rem .45rem}.sidebar-compact .nav-group{padding:.2rem 0}.sidebar-compact .navlink{justify-content:center;padding:.7rem}.sidebar-compact .sidebar-account{justify-content:center;padding:.7rem .4rem}.sidebar-compact .sidebar-logout button{justify-content:center;padding:.55rem}}@media(max-width:1023px){.sidebar-shell{visibility:hidden}.sidebar-open .sidebar-shell{visibility:visible}}@media(prefers-reduced-motion:reduce){.nav-chevron,.sidebar-shell{transition:none!important}}.hover\:text-blue-800:hover{--tw-text-opacity:1;color:rgb(30 64 175/var(--tw-text-opacity,1))}.hover\:underline:hover{text-decoration-line:underline}.focus\:not-sr-only:focus{position:static;width:auto;height:auto;padding:0;margin:0;overflow:visible;clip:auto;white-space:normal}@media (min-width:640px){.sm\:col-span-2{grid-column:span 2/span 2}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){.md\:col-span-2{grid-column:span 2/span 2}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.md\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:1024px){.lg\:flex{display:flex}.lg\:inline-flex{display:inline-flex}.lg\:hidden{display:none}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:p-8{padding:2rem}.lg\:px-8{padding-left:2rem;padding-right:2rem}}@media (min-width:1280px){.xl\:sticky{position:sticky}.xl\:top-5{top:1.25rem}.xl\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}.xl\:grid-cols-\[minmax\(0\2c 1\.7fr\)_minmax\(300px\2c 1fr\)\]{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr)}}--- before/public/assets/app.js
++++ after/public/assets/app.js
+@@ -135,20 +135,133 @@
+                 () => {
+                     group.open = opening;
+                     busy = false;
+                 },
+                 () => {
+                     busy = false;
+                 },
+             );
+         });
+     });
++    document.querySelectorAll('[data-clear-section-filter]').forEach((marketFilter) => {
++        const sectionFilter = document.getElementById(marketFilter.dataset.clearSectionFilter);
++        marketFilter.addEventListener('change', () => { sectionFilter.value = ''; });
++    });
++
++    const picker = document.querySelector('[data-section-picker]');
++    if (picker) {
++        const market = document.getElementById('market_id');
++        const select = document.getElementById('market_section_id');
++        const search = picker.querySelector('input[type="search"]');
++        const refresh = picker.querySelector('[data-refresh-sections]');
++        const add = picker.querySelector('[data-add-section]');
++        const status = picker.querySelector('[role="status"]');
++        const retained = select.querySelector('[data-retained-market]');
++        const empty = select.options[0];
++        let options = [...select.options].slice(1);
++        let requestNumber = 0;
++        picker.querySelector('[data-section-search-wrap]').hidden = false;
++        refresh.hidden = false;
++        select.required = true;
++
++        const renderOptions = () => {
++            const terms = search.value.trim().toLocaleLowerCase();
++            const selected = select.value;
++            const matches = options.filter((option) => option.text.toLocaleLowerCase().includes(terms));
++            const kept = options.find((option) => option.value === selected);
++            if (kept && !matches.includes(kept)) matches.unshift(kept);
++            select.replaceChildren(empty, ...matches);
++            if (matches.some((option) => option.value === selected)) select.value = selected;
++            else select.value = '';
++            if (!market.value) status.textContent = 'Choose a market to see its sections.';
++            else if (!matches.length) status.textContent = terms ? 'No sections match your search.' : 'This market has no active sections.';
++            else if (select.selectedOptions[0] === retained) status.textContent = 'The current inactive section is retained. Choose an active section to move the stall.';
++            else status.textContent = '';
++        };
++        const updateShortcut = () => {
++            if (!add) return;
++            const url = new URL(add.dataset.createUrl);
++            url.searchParams.set('from_stall', '1');
++            if (market.value) url.searchParams.set('market_id', market.value);
++            add.href = url.toString();
++        };
++        const loadOptions = async (changingMarket) => {
++            const currentRequest = ++requestNumber;
++            const currentMarket = market.value;
++            const previous = changingMarket ? '' : select.value;
++            const originalOptions = changingMarket ? [] : options;
++            updateShortcut();
++            const retainCurrent = retained && retained.dataset.retainedMarket === currentMarket;
++            options = retainCurrent ? [retained] : [];
++            select.replaceChildren(empty);
++            search.value = '';
++            if (!currentMarket) {
++                select.disabled = search.disabled = refresh.disabled = true;
++                renderOptions();
++                return;
++            }
++            select.disabled = search.disabled = refresh.disabled = true;
++            status.textContent = 'Loading sections…';
++            let failed = false;
++            try {
++                const response = await fetch(picker.dataset.optionsUrl.replace('MARKET_ID', encodeURIComponent(currentMarket)), {
++                    headers: { Accept: 'application/json' },
++                });
++                if (!response.ok) throw new Error('Section options unavailable');
++                const sections = await response.json();
++                if (currentRequest !== requestNumber) return;
++                options = sections.map((section) => new Option(`${section.name} · ${section.code}`, section.id));
++                if (retainCurrent && !options.some((option) => option.value === retained.value)) options.push(retained);
++            } catch (_error) {
++                if (currentRequest !== requestNumber) return;
++                options = originalOptions.length ? originalOptions : options;
++                failed = true;
++            }
++            select.replaceChildren(empty, ...options);
++            select.value = options.some((option) => option.value === previous) ? previous : '';
++            select.disabled = search.disabled = refresh.disabled = false;
++            renderOptions();
++            if (failed) status.textContent = 'Could not refresh sections. Try again.';
++        };
++        market.addEventListener('change', () => loadOptions(true));
++        refresh.addEventListener('click', () => loadOptions(false));
++        search.addEventListener('input', renderOptions);
++        select.addEventListener('change', renderOptions);
++        select.disabled = search.disabled = refresh.disabled = !market.value;
++        updateShortcut();
++        renderOptions();
++    }
++
++    const ordering = document.querySelector('[data-section-order]');
++    if (ordering) {
++        const list = ordering.querySelector('[data-section-order-list]');
++        const status = ordering.querySelector('[data-section-order-status]');
++        const updateButtons = () => {
++            for (const row of list.children) {
++                row.querySelector('[data-order-move="up"]').disabled = !row.previousElementSibling;
++                row.querySelector('[data-order-move="down"]').disabled = !row.nextElementSibling;
++            }
++        };
++        list.addEventListener('click', (event) => {
++            const button = event.target.closest('[data-order-move]');
++            if (!button) return;
++            const row = button.closest('li');
++            if (button.dataset.orderMove === 'up') list.insertBefore(row, row.previousElementSibling);
++            else list.insertBefore(row.nextElementSibling, row);
++            updateButtons();
++            (button.disabled ? row.querySelector('[data-order-move]:enabled') : button).focus();
++            status.textContent = 'Order changed. Save order to apply it.';
++        });
++        updateButtons();
++        ordering.hidden = false;
++    }
++
+     let controller;
+     document.querySelectorAll("[data-stall-url]").forEach((button) =>
+         button.addEventListener("click", async () => {
+             const target = document.getElementById("stall-detail");
+             if (controller) controller.abort();
+             controller = new AbortController();
+             target.setAttribute("aria-busy", "true");
+             target.textContent = "Loading stall details…";
+             document
+                 .querySelectorAll("[data-stall-url]")
+--- before/resources/js/app.js
++++ after/resources/js/app.js
+@@ -135,20 +135,133 @@
+                 () => {
+                     group.open = opening;
+                     busy = false;
+                 },
+                 () => {
+                     busy = false;
+                 },
+             );
+         });
+     });
++    document.querySelectorAll('[data-clear-section-filter]').forEach((marketFilter) => {
++        const sectionFilter = document.getElementById(marketFilter.dataset.clearSectionFilter);
++        marketFilter.addEventListener('change', () => { sectionFilter.value = ''; });
++    });
++
++    const picker = document.querySelector('[data-section-picker]');
++    if (picker) {
++        const market = document.getElementById('market_id');
++        const select = document.getElementById('market_section_id');
++        const search = picker.querySelector('input[type="search"]');
++        const refresh = picker.querySelector('[data-refresh-sections]');
++        const add = picker.querySelector('[data-add-section]');
++        const status = picker.querySelector('[role="status"]');
++        const retained = select.querySelector('[data-retained-market]');
++        const empty = select.options[0];
++        let options = [...select.options].slice(1);
++        let requestNumber = 0;
++        picker.querySelector('[data-section-search-wrap]').hidden = false;
++        refresh.hidden = false;
++        select.required = true;
++
++        const renderOptions = () => {
++            const terms = search.value.trim().toLocaleLowerCase();
++            const selected = select.value;
++            const matches = options.filter((option) => option.text.toLocaleLowerCase().includes(terms));
++            const kept = options.find((option) => option.value === selected);
++            if (kept && !matches.includes(kept)) matches.unshift(kept);
++            select.replaceChildren(empty, ...matches);
++            if (matches.some((option) => option.value === selected)) select.value = selected;
++            else select.value = '';
++            if (!market.value) status.textContent = 'Choose a market to see its sections.';
++            else if (!matches.length) status.textContent = terms ? 'No sections match your search.' : 'This market has no active sections.';
++            else if (select.selectedOptions[0] === retained) status.textContent = 'The current inactive section is retained. Choose an active section to move the stall.';
++            else status.textContent = '';
++        };
++        const updateShortcut = () => {
++            if (!add) return;
++            const url = new URL(add.dataset.createUrl);
++            url.searchParams.set('from_stall', '1');
++            if (market.value) url.searchParams.set('market_id', market.value);
++            add.href = url.toString();
++        };
++        const loadOptions = async (changingMarket) => {
++            const currentRequest = ++requestNumber;
++            const currentMarket = market.value;
++            const previous = changingMarket ? '' : select.value;
++            const originalOptions = changingMarket ? [] : options;
++            updateShortcut();
++            const retainCurrent = retained && retained.dataset.retainedMarket === currentMarket;
++            options = retainCurrent ? [retained] : [];
++            select.replaceChildren(empty);
++            search.value = '';
++            if (!currentMarket) {
++                select.disabled = search.disabled = refresh.disabled = true;
++                renderOptions();
++                return;
++            }
++            select.disabled = search.disabled = refresh.disabled = true;
++            status.textContent = 'Loading sections…';
++            let failed = false;
++            try {
++                const response = await fetch(picker.dataset.optionsUrl.replace('MARKET_ID', encodeURIComponent(currentMarket)), {
++                    headers: { Accept: 'application/json' },
++                });
++                if (!response.ok) throw new Error('Section options unavailable');
++                const sections = await response.json();
++                if (currentRequest !== requestNumber) return;
++                options = sections.map((section) => new Option(`${section.name} · ${section.code}`, section.id));
++                if (retainCurrent && !options.some((option) => option.value === retained.value)) options.push(retained);
++            } catch (_error) {
++                if (currentRequest !== requestNumber) return;
++                options = originalOptions.length ? originalOptions : options;
++                failed = true;
++            }
++            select.replaceChildren(empty, ...options);
++            select.value = options.some((option) => option.value === previous) ? previous : '';
++            select.disabled = search.disabled = refresh.disabled = false;
++            renderOptions();
++            if (failed) status.textContent = 'Could not refresh sections. Try again.';
++        };
++        market.addEventListener('change', () => loadOptions(true));
++        refresh.addEventListener('click', () => loadOptions(false));
++        search.addEventListener('input', renderOptions);
++        select.addEventListener('change', renderOptions);
++        select.disabled = search.disabled = refresh.disabled = !market.value;
++        updateShortcut();
++        renderOptions();
++    }
++
++    const ordering = document.querySelector('[data-section-order]');
++    if (ordering) {
++        const list = ordering.querySelector('[data-section-order-list]');
++        const status = ordering.querySelector('[data-section-order-status]');
++        const updateButtons = () => {
++            for (const row of list.children) {
++                row.querySelector('[data-order-move="up"]').disabled = !row.previousElementSibling;
++                row.querySelector('[data-order-move="down"]').disabled = !row.nextElementSibling;
++            }
++        };
++        list.addEventListener('click', (event) => {
++            const button = event.target.closest('[data-order-move]');
++            if (!button) return;
++            const row = button.closest('li');
++            if (button.dataset.orderMove === 'up') list.insertBefore(row, row.previousElementSibling);
++            else list.insertBefore(row.nextElementSibling, row);
++            updateButtons();
++            (button.disabled ? row.querySelector('[data-order-move]:enabled') : button).focus();
++            status.textContent = 'Order changed. Save order to apply it.';
++        });
++        updateButtons();
++        ordering.hidden = false;
++    }
++
+     let controller;
+     document.querySelectorAll("[data-stall-url]").forEach((button) =>
+         button.addEventListener("click", async () => {
+             const target = document.getElementById("stall-detail");
+             if (controller) controller.abort();
+             controller = new AbortController();
+             target.setAttribute("aria-busy", "true");
+             target.textContent = "Loading stall details…";
+             document
+                 .querySelectorAll("[data-stall-url]")
+--- before/resources/views/map/details.blade.php
++++ after/resources/views/map/details.blade.php
+@@ -1,4 +1,4 @@
+-<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>{{ $stall->section->name }}</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)<div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Agreed daily rate / rental</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Reference monthly rental + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
++<div class="flex justify-between gap-3 items-center mb-4"><h2>Stall {{ $stall->code }}</h2><span class="badge status-{{ $stall->status }}">{{ ucfirst($stall->status) }}</span></div><dl><div class="detailrow"><dt>Market / section</dt><dd>{{ $stall->market->name }}<br>@include('sections.swatch',['section'=>$stall->section]) {{ optional($stall->section)->name ?: 'Unknown section' }}@if(optional($stall->section)->status === 'inactive') (Inactive)@endif</dd></div><div class="detailrow"><dt>Category / classification</dt><dd>{{ optional($stall->category)->name ?: '—' }}<br>{{ $stall->classification }}</dd></div><div class="detailrow"><dt>Current stall area</dt><dd>{{ $stall->area }} sq. m</dd></div><div class="detailrow"><dt>Current location</dt><dd>{{ $stall->location_type ? ucfirst($stall->location_type) : 'Unclassified' }}</dd></div>@can('tenants.view')<div class="detailrow"><dt>Current tenant</dt><dd>{{ $assignment?$assignment->tenant->name:'Unassigned' }}</dd></div><div class="detailrow"><dt>Business</dt><dd>{{ $assignment?optional($assignment->business)->name:'—' }}<br>{{ $assignment && $assignment->business ? (optional($assignment->business->businessCategory)->name ?: $assignment->business->category) : '' }}</dd></div>@endcan @can('billing.view')@if($assessment)<div class="detailrow"><dt>Assessed category / location</dt><dd>{{ $assessment->business_category_name }}<br>{{ ucfirst($assessment->location_type) }} · {{ $assessment->floor_area }} sq. m.</dd></div><div class="detailrow"><dt>Agreed daily rate / rental</dt><dd>PHP {{ $assessment->rental_rate_sqm }} per sq. m.<br>PHP {{ $assessment->daily_rental }} daily</dd></div><div class="detailrow"><dt>Reference monthly rental + CUSA</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}<br><span class="text-xs">{{ $assessment->period }} · {{ $assessment->billing_days }} days</span></dd></div>@endif @endcan @can('billing.view')<div class="detailrow"><dt>Agreement monthly rent</dt><dd>{{ $assignment && $assignment->agreement?'PHP '.number_format((float)$assignment->agreement->monthly_amount,2):'—' }}</dd></div><div class="detailrow"><dt>Total outstanding</dt><dd>PHP {{ number_format((float)$balance,2) }}</dd></div><div class="detailrow"><dt>Payment status</dt><dd>{{ bccomp($balance,'0',2)>0?'Outstanding balance':'No outstanding posted balance' }}</dd></div>@endcan</dl>
+ @can('contracts.view')<div class="detailrow"><dt>Lease status</dt><dd>@if($lease)<a class="underline text-blue-800" href="{{ route('contracts.show',$lease) }}">{{ ucfirst($lease->status) }} · {{ $lease->control_number }}</a>@else No lease contract @endif</dd></div>@endcan @can('payments.view')<h3 class="mt-5 mb-2">Latest posted payments</h3>@forelse($payments as $payment)<a class="detailrow text-blue-800" href="{{ route('payments.show',$payment) }}"><span>{{ $payment->payment_date }}</span><strong>PHP {{ number_format((float)$payment->amount,2) }}</strong></a>@empty<p class="text-sm text-slate-600">No posted payments.</p>@endforelse @endcan
+ @can('tenants.view')<details class="mt-5"><summary class="cursor-pointer font-semibold">Assignment history</summary>@forelse($history as $a)<p class="text-sm border-b py-3">{{ $a->tenant->name }}<br>{{ $a->start_date }} – {{ $a->end_date ?: 'Ongoing' }} · {{ $a->status }}</p>@empty<p class="text-sm py-3">No assignments recorded.</p>@endforelse</details>@endcan
+-<div class="flex flex-wrap gap-2 mt-5"><a class="btn secondary" href="{{ route('records.show',['stalls',$stall->id]) }}">Full stall record</a>@can('update',$stall)<a class="btn secondary" href="{{ route('records.edit',['stalls',$stall->id]) }}">Edit stall</a>@endcan @can('assignments.manage')@if(!$assignment && $stall->status!=='occupied')<a class="btn" href="{{ route('assignments.create',['stall_id'=>$stall->id]) }}">Assign tenant</a>@elseif($assignment)<a class="btn secondary" href="{{ route('assignments.transfer-form',$assignment) }}">Transfer / renew</a><a class="btn secondary" href="{{ route('assignments.index',['stall_id'=>$stall->id]) }}">End assignment</a>@endif @endcan @if($assignment)<a class="btn secondary" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">Tenant record</a>@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$assignment->tenant_id]) }}">Billing history</a>@endcan @can('payments.record')<a class="btn" href="{{ route('payments.create',['tenant_id'=>$assignment->tenant_id]) }}">Record payment</a>@endcan @endif @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['stall_id'=>$stall->id]) }}">Payment history</a>@endcan</div>
++<div class="flex flex-wrap gap-2 mt-5"><a class="btn secondary" href="{{ route('records.show',['stalls',$stall->id]) }}">Full stall record</a>@can('update',$stall)<a class="btn secondary" href="{{ route('records.edit',['stalls',$stall->id]) }}">Edit stall</a>@endcan @can('assignments.manage')@if(!$assignment && in_array($stall->status,['vacant','reserved'],true) && optional($stall->section)->status === 'active' && optional($stall->section)->market_id === $stall->market_id && $stall->market->status === 'active')<a class="btn" href="{{ route('assignments.create',['stall_id'=>$stall->id]) }}">Assign tenant</a>@elseif($assignment)<a class="btn secondary" href="{{ route('assignments.transfer-form',$assignment) }}">Transfer / renew</a><a class="btn secondary" href="{{ route('assignments.index',['stall_id'=>$stall->id]) }}">End assignment</a>@endif @endcan @if($assignment)<a class="btn secondary" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">Tenant record</a>@can('billing.view')<a class="btn secondary" href="{{ route('billing.index',['tenant_id'=>$assignment->tenant_id]) }}">Billing history</a>@endcan @can('payments.record')<a class="btn" href="{{ route('payments.create',['tenant_id'=>$assignment->tenant_id]) }}">Record payment</a>@endcan @endif @can('payments.view')<a class="btn secondary" href="{{ route('payments.index',['stall_id'=>$stall->id]) }}">Payment history</a>@endcan</div>
+--- before/resources/views/map/index.blade.php
++++ after/resources/views/map/index.blade.php
+@@ -1,5 +1,84 @@
+-@extends('layouts.app')
+-@section('title','Interactive Market Map')
+-@section('subtitle','Select a stall to inspect occupancy, tenant and authorized billing information.')
+-@section('actions')@if($market)@can('markets.manage')<a class="btn secondary" href="{{ route('map.editor',$market) }}">Edit layout</a>@endcan @endif @endsection
+-@section('content')<form class="toolbar mb-6" method="get"><div><label for="market">Market</label><select name="market_id" id="market">@foreach($markets as $m)<option value="{{ $m->id }}" @if($market && $market->id===$m->id)selected @endif>{{ $m->name }}</option>@endforeach</select></div><div><label for="section">Section</label><select name="section_id" id="section"><option value="">All sections</option>@if($market)@foreach($market->sections as $s)<option value="{{ $s->id }}" @if(request('section_id')==$s->id)selected @endif>{{ $s->name }}</option>@endforeach @endif</select></div><div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option @if(request('status')===$status)selected @endif>{{ $status }}</option>@endforeach</select></div><div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>@can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan<button class="btn">Apply filters</button></form><div class="grid xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)] gap-5 items-start"><section class="panel min-w-0"><h2 class="mb-4">{{ $market?$market->name:'No market registered' }}</h2><div class="overflow-x-auto pb-4"><div class="grid gap-3" style="grid-template-columns:repeat({{ $layout?$layout->columns:6 }},minmax(76px,1fr));min-width:{{ ($layout?$layout->columns:6)*88 }}px">@forelse($stalls as $stall)<button type="button" class="stall status-{{ $stall->status }}" data-stall-url="{{ route('map.details',$stall) }}" aria-pressed="false" @if($stall->position)style="grid-column:{{ $stall->position->column }} / span {{ $stall->position->width }};grid-row:{{ $stall->position->row }} / span {{ $stall->position->height }}"@endif><strong class="block text-sm">{{ $stall->code }}</strong><span class="block text-xs mt-2">{{ ucfirst($stall->status) }}</span></button>@empty<p class="empty col-span-full">No stalls match this view.</p>@endforelse</div></div><div class="flex flex-wrap gap-2 border-t pt-4">@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<span class="badge status-{{ $status }}">{{ ucfirst($status) }}</span>@endforeach</div><p class="mt-3 text-xs text-slate-600">Colors indicate occupancy. Payment status is shown separately.</p></section><section id="stall-detail" class="panel xl:sticky xl:top-5" aria-label="Selected stall details" aria-live="polite"><h2>Stall details</h2><p class="empty">Select a stall to view its record.</p></section></div>@endsection
++@extends('layouts.app')
++@section('title','Interactive Market Map')
++@section('subtitle','Select a stall to inspect occupancy, tenant and authorized billing information.')
++@section('actions')
++    @can('markets.manage')
++        @if($market)<a class="btn secondary" href="{{ route('map.editor',$market) }}">Edit layout</a>@endif
++    @endcan
++@endsection
++@section('content')
++<form class="toolbar mb-6" method="get">
++    <div><label for="market">Market</label><select name="market_id" id="market" data-clear-section-filter="section">
++        @foreach($markets as $choice)<option value="{{ $choice->id }}" @if($market && $market->id === $choice->id) selected @endif>{{ $choice->name }}</option>@endforeach
++    </select></div>
++    <div><label for="section">Section</label><select name="section_id" id="section">
++        <option value="">All sections</option>
++        @foreach($sections as $section)
++            @if($section->status === 'active' || optional($selectedSection)->id === $section->id)
++                <option value="{{ $section->id }}" @if(optional($selectedSection)->id === $section->id) selected @endif>{{ $section->name }}@if($section->status === 'inactive') (Inactive)@endif</option>
++            @endif
++        @endforeach
++    </select></div>
++    <div><label for="status">Occupancy</label><select id="status" name="status">
++        <option value="">All statuses</option>
++        @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
++            <option value="{{ $status }}" @if(request('status') === $status) selected @endif>{{ ucfirst($status) }}</option>
++        @endforeach
++    </select></div>
++    <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>
++        @foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)
++            <option value="{{ $value }}" @if(request('location_type') === $value) selected @endif>{{ $label }}</option>
++        @endforeach
++    </select></div>
++    @can('tenants.view')
++        <div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>
++            @foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id') == $category->id) selected @endif>{{ $category->name }}</option>@endforeach
++        </select></div>
++    @endcan
++    <button class="btn">Apply filters</button>
++</form>
++<div class="grid xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)] gap-5 items-start">
++    <section class="panel min-w-0">
++        <h2 class="mb-4">{{ $market ? $market->name : 'No market registered' }}</h2>
++        <div class="overflow-x-auto pb-4" role="region" aria-label="Stall layout" tabindex="0">
++            <div class="grid gap-3" style="grid-template-columns:repeat({{ $layout ? $layout->columns : 6 }},minmax(76px,1fr));min-width:{{ ($layout ? $layout->columns : 6)*88 }}px">
++                @forelse($stalls as $stall)
++                    <button type="button" class="stall status-{{ $stall->status }}" data-stall-url="{{ route('map.details',$stall) }}" aria-pressed="false"
++                            @if($stall->position) style="grid-column:{{ $stall->position->column }} / span {{ $stall->position->width }};grid-row:{{ $stall->position->row }} / span {{ $stall->position->height }}" @endif>
++                        <strong class="block text-sm">{{ $stall->code }}</strong>
++                        <span class="block text-xs mt-2">{{ ucfirst($stall->status) }}</span>
++                        <span class="flex justify-center items-center gap-1 mt-1 text-xs break-all">
++                            @include('sections.swatch',['section'=>$stall->section]){{ optional($stall->section)->name ?: 'Unknown section' }}
++                        </span>
++                    </button>
++                @empty
++                    <p class="empty col-span-full">No stalls match this view.</p>
++                @endforelse
++            </div>
++        </div>
++        <div class="flex flex-wrap gap-2 border-t pt-4" aria-label="Occupancy legend">
++            @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
++                <span class="badge status-{{ $status }}">{{ ucfirst($status) }}</span>
++            @endforeach
++        </div>
++        @if($sections->isNotEmpty())
++            <h3 class="mt-5 mb-2">Section summary</h3>
++            <ul class="divide-y divide-slate-200 text-sm">
++                @foreach($selectedSection ? collect([$selectedSection]) : $sections as $section)
++                    @php($visible = $sectionStalls->get($section->id, collect()))
++                    @php($counts = $visible->countBy('status'))
++                    <li class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
++                        <span class="inline-flex items-center gap-2 font-medium">@include('sections.swatch',['section'=>$section]){{ $section->name }}@if($section->status === 'inactive') <span class="badge status-inactive">Inactive</span>@endif</span>
++                        <span class="text-slate-600">{{ $visible->count() }} shown · {{ $counts->get('occupied', 0) }} occupied · {{ $counts->get('vacant', 0) }} vacant
++                            @foreach(['reserved','maintenance','inactive'] as $status)@if($counts->has($status)) · {{ $counts->get($status) }} {{ $status }}@endif @endforeach
++                        </span>
++                    </li>
++                @endforeach
++            </ul>
++        @endif
++    </section>
++    <section id="stall-detail" class="panel xl:sticky xl:top-5" aria-label="Selected stall details" aria-live="polite">
++        <h2>Stall details</h2><p class="empty">Select a stall to view its record.</p>
++    </section>
++</div>
++@endsection
+--- before/resources/views/records/form.blade.php
++++ after/resources/views/records/form.blade.php
+@@ -1,8 +1,9 @@
+ @extends('layouts.app')
+ @section('title',($record->exists?'Edit ':'Add ').\Illuminate\Support\Str::singular($spec['label']))
+ @section('content')<form class="panel max-w-4xl" method="post" action="{{ $record->exists?route('records.update',[$type,$record->id]):route('records.store',$type) }}">@csrf @if($record->exists)@method('PUT')@endif<div class="grid md:grid-cols-2 gap-x-6 gap-y-2">@foreach($spec['fields'] as $key=>$meta)<div @if($meta[1]==='textarea')class="md:col-span-2"@endif><label for="{{ $key }}">{{ $meta[0] }}</label>@php($value=old($key,$record->$key))
+ @if($key==='status' && $type==='stalls' && $record->status==='occupied')<input type="hidden" name="status" value="occupied"><p class="notice">Occupied. End or transfer the assignment to change occupancy.</p>
+ @elseif($meta[1]==='textarea')<textarea id="{{ $key }}" name="{{ $key }}" rows="3">{{ $value }}</textarea>
+ @elseif($meta[1]==='select')<select id="{{ $key }}" name="{{ $key }}" @if($key==='location_type' && !$record->exists)required @endif>@foreach($meta[2] as $v=>$label)<option value="{{ $v }}" @if($value===$v)selected @endif>{{ $label }}</option>@endforeach</select>@if($key==='location_type')<p class="text-xs text-slate-600 mt-1">Inner uses the business category minimum rate; Outer uses its maximum. Unclassified existing stalls cannot receive new authoritative assessments.</p>@endif
++@elseif($type==='stalls' && $key==='market_section_id')@include('stalls.section-picker',['selectedSectionId'=>$value])
+ @elseif($meta[1]==='relation')<select id="{{ $key }}" name="{{ $key }}"><option value="">Choose {{ strtolower($meta[0]) }}</option>@foreach($options[$key] as $option)<option value="{{ $option->id }}" @if($value==$option->id)selected @endif>{{ $option->name }} @if($option->code) · {{ $option->code }}@endif</option>@endforeach</select>
+ @else<input id="{{ $key }}" name="{{ $key }}" type="{{ $meta[1] }}" value="{{ $value }}" @if($meta[1]==='number')step="0.01" min="0"@endif>@endif @error($key)<p class="text-red-800 text-sm">{{ $message }}</p>@enderror</div>@endforeach</div>@if($type==='stalls' && $record->exists)<div class="mt-4"><label for="change_reason">Reason for area or location correction</label><textarea id="change_reason" name="change_reason" maxlength="1000">{{ old('change_reason') }}</textarea><p class="text-xs text-slate-600 mt-1">Required when changing area or location on a stall with assignment history. Existing assessments retain their original values.</p></div>@endif<div class="flex gap-3 mt-6"><button class="btn">Save record</button><a class="btn secondary" href="{{ route('records.index',$type) }}">Cancel</a></div><p class="text-xs text-slate-600 mt-4">Use inactive status to archive eligible records. History is retained. Select active/vacant to restore an eligible record.</p></form>@endsection
+--- before/resources/views/records/index.blade.php
++++ after/resources/views/records/index.blade.php
+@@ -1,5 +1,5 @@
+ @extends('layouts.app')
+ @section('title',$spec['label'])
+ @section('subtitle','Search, maintain and retain market records.')
+ @section('actions')@can($spec['permission'].'.manage')<a class="btn" href="{{ route('records.create',$type) }}">Add record</a>@endcan @endsection
+-@section('content')@if($type==='rates')<p class="notice">These legacy monthly schedules support historical agreements. Configure new daily category rates in <a class="underline" href="{{ route('business-categories.index') }}">Business Categories</a>. Existing agreed amounts remain unchanged.</p>@endif <div class="flex gap-3 mb-4">@if($type==='markets')<a class="btn secondary" href="{{ route('records.index','sections') }}">Manage sections</a>@endif @if($type==='stalls')<a class="btn secondary" href="{{ route('records.index','categories') }}">Categories</a><a class="btn secondary" href="{{ route('map') }}">Open map</a>@endif @if($type==='tenants')<a class="btn secondary" href="{{ route('records.index','businesses') }}">Businesses</a>@endif</div><section class="panel"><form class="toolbar mb-5" method="get"><div><label for="q">Search {{ strtolower($spec['label']) }}</label><input id="q" name="q" value="{{ request('q') }}" placeholder="{{ ucfirst($spec['search']) }}"></div>@if(isset($spec['fields']['status']))<div><label for="status">Status</label><select id="status" name="status"><option value="">All statuses</option>@foreach($spec['fields']['status'][2] as $value=>$label)<option value="{{ $value }}" @if(request('status')===$value)selected @endif>{{ $label }}</option>@endforeach @if($type==='stalls')<option value="occupied" @if(request('status')==='occupied')selected @endif>Occupied</option>@endif</select></div>@endif<button class="btn secondary">Filter</button><a href="{{ route('records.index',$type) }}" class="text-sm underline py-3">Clear</a></form><div class="tablewrap"><table><thead><tr>@foreach(array_slice($spec['fields'],0,5,true) as $key=>$meta)<th>{{ $meta[0] }}</th>@endforeach<th>Actions</th></tr></thead><tbody>@forelse($records as $record)<tr>@foreach(array_slice($spec['fields'],0,5,true) as $key=>$meta)<td>@if($meta[1]==='relation'){{ optional($meta[2]::find($record->$key))->name ?: '—' }}@else{{ $record->$key ?: '—' }}@endif</td>@endforeach<td class="whitespace-nowrap"><a class="text-blue-800 underline mr-3" href="{{ route('records.show',[$type,$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',[$type,$record->id]) }}">Edit</a>@endcan</td></tr>@empty<tr><td colspan="6" class="empty">No matching records.</td></tr>@endforelse</tbody></table></div><div class="mt-5">{{ $records->links() }}</div></section>@endsection
++@section('content')@if($type==='rates')<p class="notice">These legacy monthly schedules support historical agreements. Configure new daily category rates in <a class="underline" href="{{ route('business-categories.index') }}">Business Categories</a>. Existing agreed amounts remain unchanged.</p>@endif <div class="flex gap-3 mb-4">@if($type==='markets')@can('sections.view')<a class="btn secondary" href="{{ route('records.index','sections') }}">Manage sections</a>@endcan @endif @if($type==='stalls')<a class="btn secondary" href="{{ route('records.index','categories') }}">Categories</a><a class="btn secondary" href="{{ route('map') }}">Open map</a>@endif @if($type==='tenants')<a class="btn secondary" href="{{ route('records.index','businesses') }}">Businesses</a>@endif</div><section class="panel"><form class="toolbar mb-5" method="get"><div><label for="q">Search {{ strtolower($spec['label']) }}</label><input id="q" name="q" value="{{ request('q') }}" placeholder="{{ ucfirst($spec['search']) }}"></div>@if(isset($spec['fields']['status']))<div><label for="status">Status</label><select id="status" name="status"><option value="">All statuses</option>@foreach($spec['fields']['status'][2] as $value=>$label)<option value="{{ $value }}" @if(request('status')===$value)selected @endif>{{ $label }}</option>@endforeach @if($type==='stalls')<option value="occupied" @if(request('status')==='occupied')selected @endif>Occupied</option>@endif</select></div>@endif<button class="btn secondary">Filter</button><a href="{{ route('records.index',$type) }}" class="text-sm underline py-3">Clear</a></form><div class="tablewrap"><table><thead><tr>@foreach(array_slice($spec['fields'],0,5,true) as $key=>$meta)<th>{{ $meta[0] }}</th>@endforeach<th>Actions</th></tr></thead><tbody>@forelse($records as $record)<tr>@foreach(array_slice($spec['fields'],0,5,true) as $key=>$meta)<td>@if($meta[1]==='relation'){{ optional($meta[2]::find($record->$key))->name ?: '—' }}@else{{ $record->$key ?: '—' }}@endif</td>@endforeach<td class="whitespace-nowrap"><a class="text-blue-800 underline mr-3" href="{{ route('records.show',[$type,$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',[$type,$record->id]) }}">Edit</a>@endcan</td></tr>@empty<tr><td colspan="6" class="empty">No matching records.</td></tr>@endforelse</tbody></table></div><div class="mt-5">{{ $records->links() }}</div></section>@endsection
+--- before/resources/views/sections/form.blade.php
++++ after/resources/views/sections/form.blade.php
+@@ -0,0 +1,38 @@
++@extends('layouts.app')
++@section('title',$record->exists ? 'Edit section' : 'Add section')
++@section('content')
++<form class="panel max-w-3xl" method="post" action="{{ $record->exists ? route('records.update',['sections',$record->id]) : route('records.store','sections') }}">
++    @csrf
++    @if($record->exists) @method('PUT') @endif
++    @if($fromStall)
++        <input type="hidden" name="from_stall" value="1">
++        <p class="notice">Your stall form is still open in the other tab. After saving the section, return there and refresh the section choices.</p>
++    @endif
++    <div class="grid md:grid-cols-2 gap-x-6 gap-y-2">
++        <div><label for="market_id">Market</label><select name="market_id" id="market_id" required>
++            <option value="">Choose a market</option>
++            @foreach($markets as $market)
++                <option value="{{ $market->id }}" @if(old('market_id',$record->market_id)==$market->id) selected @endif>{{ $market->name }}</option>
++            @endforeach
++        </select></div>
++        <div><label for="code">Section code</label><input name="code" id="code" value="{{ old('code',$record->code) }}" maxlength="40" required></div>
++        <div class="md:col-span-2"><label for="name">Section name</label><input name="name" id="name" value="{{ old('name',$record->name) }}" maxlength="255" required></div>
++        <div class="md:col-span-2"><label for="description">Description <span class="text-slate-600 font-normal">(optional)</span></label>
++            <textarea name="description" id="description" rows="3" maxlength="2000">{{ old('description',$record->description) }}</textarea></div>
++        <div><label for="color">Map label color <span class="text-slate-600 font-normal">(optional)</span></label>
++            <input name="color" id="color" value="{{ old('color',$record->color) }}" maxlength="7" pattern="#[0-9a-fA-F]{6}" placeholder="#2366AC" aria-describedby="section-color-format">
++            <p id="section-color-format" class="text-xs text-slate-600 mt-1">Use # followed by six hexadecimal characters.</p>
++        </div>
++        <div><label for="sort_order">Display order</label><input name="sort_order" id="sort_order" type="number" min="0" max="999999" step="1" value="{{ old('sort_order',$record->sort_order ?? 0) }}" required></div>
++        <div><label for="status">Status</label><select name="status" id="status" required aria-describedby="section-status-help">
++            @foreach(['active','inactive'] as $status)
++                <option value="{{ $status }}" @if(old('status',$record->status ?? 'active')===$status) selected @endif>{{ ucfirst($status) }}</option>
++            @endforeach
++        </select><p id="section-status-help" class="text-xs text-slate-600 mt-1">Inactive sections retain existing stalls and are unavailable for new placement or assignments.</p></div>
++    </div>
++    <div class="flex flex-wrap gap-3 mt-6">
++        <button class="btn">Save section</button>
++        <a class="btn secondary" href="{{ route('records.index',['type'=>'sections','market_id'=>$record->market_id]) }}">Cancel</a>
++    </div>
++</form>
++@endsection
+--- before/resources/views/sections/index.blade.php
++++ after/resources/views/sections/index.blade.php
+@@ -0,0 +1,83 @@
++@extends('layouts.app')
++@section('title','Market Sections')
++@section('actions')
++    @can('sections.manage')
++        <a class="btn" href="{{ route('records.create', ['type'=>'sections','market_id'=>$filters['market_id'] ?? null]) }}">Add section</a>
++    @endcan
++@endsection
++@section('content')
++<section class="panel">
++    <form class="toolbar mb-5" method="get">
++        <div><label for="q">Section name or code</label><input id="q" name="q" maxlength="100" value="{{ $filters['q'] ?? '' }}"></div>
++        <div><label for="market_id">Market</label><select id="market_id" name="market_id">
++            <option value="">All markets</option>
++            @foreach($markets as $market)
++                <option value="{{ $market->id }}" @if(($filters['market_id'] ?? null) == $market->id) selected @endif>{{ $market->name }}</option>
++            @endforeach
++        </select></div>
++        <div><label for="status">Status</label><select id="status" name="status">
++            <option value="">All statuses</option>
++            @foreach(['active','inactive'] as $status)
++                <option value="{{ $status }}" @if(($filters['status'] ?? '') === $status) selected @endif>{{ ucfirst($status) }}</option>
++            @endforeach
++        </select></div>
++        <button class="btn secondary">Apply filters</button>
++        <a class="text-sm underline py-3" href="{{ route('records.index','sections') }}">Clear</a>
++    </form>
++    <div class="tablewrap" role="region" aria-label="Market sections" tabindex="0">
++        <table>
++            <thead><tr><th scope="col">Section</th><th scope="col">Market</th><th scope="col">Status</th><th scope="col">Order</th><th scope="col">Stalls</th><th scope="col">Actions</th></tr></thead>
++            <tbody>
++            @forelse($records as $record)
++                <tr>
++                    <td><div class="flex items-center gap-2">@include('sections.swatch',['section'=>$record])<strong>{{ $record->name }}</strong></div>
++                        <div class="text-xs text-slate-600">{{ $record->code }}</div></td>
++                    <td>{{ $record->market->name }}</td>
++                    <td><span class="badge @if($record->status === 'inactive') status-inactive @endif">{{ ucfirst($record->status) }}</span></td>
++                    <td>{{ $record->sort_order }}</td>
++                    <td><strong>{{ $record->stalls_count }} total</strong><div class="text-xs text-slate-600">
++                        @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
++                            @if(!$loop->first) · @endif{{ $record->{$status.'_count'} }} {{ $status }}
++                        @endforeach
++                    </div></td>
++                    <td><div class="flex flex-wrap gap-3">
++                        <a class="text-blue-800 underline" href="{{ route('records.show',['sections',$record->id]) }}">View<span class="sr-only"> {{ $record->name }}</span></a>
++                        @can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['sections',$record->id]) }}">Edit<span class="sr-only"> {{ $record->name }}</span></a>@endcan
++                    </div></td>
++                </tr>
++            @empty
++                <tr><td colspan="6" class="empty">No sections match these filters.</td></tr>
++            @endforelse
++            </tbody>
++        </table>
++    </div>
++    <div class="mt-5">{{ $records->links() }}</div>
++</section>
++@can('sections.manage')
++    @if(isset($filters['market_id']) && $orderable->count() > 1 && $orderable->count() <= 2000)
++        <details class="panel mt-5" data-section-order hidden @if($errors->has('ids') || $errors->has('ids.*')) open @endif>
++            <summary class="cursor-pointer font-semibold">Reorder sections for {{ $markets->firstWhere('id', (int) $filters['market_id'])->name }}</summary>
++            <form method="post" action="{{ route('sections.order') }}" class="mt-4 max-w-3xl">
++                @csrf
++                <input type="hidden" name="market_id" value="{{ $filters['market_id'] }}">
++                <ol data-section-order-list class="divide-y divide-slate-200">
++                    @foreach($orderable as $section)
++                        <li class="flex flex-wrap items-center justify-between gap-2 py-3">
++                            <input type="hidden" name="ids[]" value="{{ $section->id }}">
++                            <span>{{ $section->name }} · {{ $section->code }}</span>
++                            <div class="flex gap-2">
++                                <button type="button" class="btn secondary" data-order-move="up" aria-label="Move {{ $section->name }} up">Move up</button>
++                                <button type="button" class="btn secondary" data-order-move="down" aria-label="Move {{ $section->name }} down">Move down</button>
++                            </div>
++                        </li>
++                    @endforeach
++                </ol>
++                <p class="text-sm text-slate-600 mt-3" aria-live="polite" data-section-order-status></p>
++                <button class="btn mt-3">Save order</button>
++            </form>
++        </details>
++    @elseif(empty($filters['market_id']) && $records->isNotEmpty())
++        <p class="text-sm text-slate-600 mt-4">To reorder sections, filter by one market.</p>
++    @endif
++@endcan
++@endsection
+--- before/resources/views/sections/show.blade.php
++++ after/resources/views/sections/show.blade.php
+@@ -0,0 +1,29 @@
++@extends('layouts.app')
++@section('title',$record->name)
++@section('subtitle',$record->market->name.' · '.$record->code)
++@section('actions')
++    @can('update',$record)<a class="btn" href="{{ route('records.edit',['sections',$record->id]) }}">Edit section</a>@endcan
++@endsection
++@section('content')
++<section class="panel max-w-3xl">
++    <h2>Section details</h2>
++    <dl>
++        <div class="detailrow"><dt>Status</dt><dd>{{ ucfirst($record->status) }}</dd></div>
++        <div class="detailrow"><dt>Display order</dt><dd>{{ $record->sort_order }}</dd></div>
++        <div class="detailrow"><dt>Map label color</dt><dd class="flex items-center gap-2">@include('sections.swatch',['section'=>$record]){{ $record->color ?: 'None' }}</dd></div>
++        @if($record->description)<div class="detailrow"><dt>Description</dt><dd class="whitespace-pre-line">{{ $record->description }}</dd></div>@endif
++    </dl>
++    <h2 class="mt-6">Stalls in this section</h2>
++    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 mt-2">
++        <div class="detailrow"><dt>Total</dt><dd>{{ $record->stalls_count }}</dd></div>
++        @foreach(\App\Models\MarketSection::STALL_STATUSES as $status)
++            <div class="detailrow"><dt>{{ ucfirst($status) }}</dt><dd>{{ $record->{$status.'_count'} }}</dd></div>
++        @endforeach
++    </dl>
++    <div class="flex flex-wrap gap-3 mt-6">
++        @can('stalls.view')<a class="btn secondary" href="{{ route('records.index',['type'=>'stalls','market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View stalls</a>@endcan
++        @can('map.view')<a class="btn secondary" href="{{ route('map',['market_id'=>$record->market_id,'section_id'=>$record->id]) }}">View on market map</a>@endcan
++        <a class="btn secondary" href="{{ route('records.index',['type'=>'sections','market_id'=>$record->market_id]) }}">Back to sections</a>
++    </div>
++</section>
++@endsection
+--- before/resources/views/sections/swatch.blade.php
++++ after/resources/views/sections/swatch.blade.php
+@@ -0,0 +1,3 @@
++@if($section && preg_match('/\A#[0-9a-fA-F]{6}\z/', $section->color ?? ''))
++    <span aria-hidden="true" class="inline-block w-3 h-3 rounded-full border border-slate-400 shrink-0" style="background-color:{{ $section->color }}"></span>
++@endif
+--- before/resources/views/stalls/index.blade.php
++++ after/resources/views/stalls/index.blade.php
+@@ -1,26 +1,28 @@
+ @extends('layouts.app')
+ @section('title','Stall Management')
+ @section('subtitle','Maintain physical stalls and verified locations. Agreed rental values remain in their historical assessments.')
+-@section('actions')@can('stalls.manage')<a class="btn" href="{{ route('records.create','stalls') }}">Add stall</a>@endcan @endsection
++@section('actions')@can('stalls.manage')<a class="btn" href="{{ route('records.create',['type'=>'stalls','market_id'=>request('market_id')]) }}">Add stall</a>@endcan @endsection
+ @section('content')
+-<div class="flex flex-wrap gap-3 mb-4"><a class="btn secondary" href="{{ route('records.index','categories') }}">Physical categories</a>@can('map.view')<a class="btn secondary" href="{{ route('map') }}">Open market layout</a>@endcan</div>
++<div class="flex flex-wrap gap-3 mb-4"><a class="btn secondary" href="{{ route('records.index','categories') }}">Physical categories</a>@can('sections.view')<a class="btn secondary" href="{{ route('records.index','sections') }}">Market sections</a>@endcan @can('map.view')<a class="btn secondary" href="{{ route('map') }}">Open market layout</a>@endcan</div>
+ <section class="panel">
+ <form method="get" class="toolbar mb-5">
+ <div><label for="q">Stall code</label><input id="q" name="q" maxlength="100" value="{{ request('q') }}" placeholder="Search stall code"></div>
++<div><label for="market_id">Market</label><select id="market_id" name="market_id" data-clear-section-filter="section_id"><option value="">All markets</option>@foreach($stallMarkets as $market)<option value="{{ $market->id }}" @if(request('market_id')==$market->id)selected @endif>{{ $market->name }}</option>@endforeach</select></div>
++<div><label for="section_id">Section</label><select id="section_id" name="section_id"><option value="">All sections</option>@foreach($stallSections as $section)<option value="{{ $section->id }}" @if(request('section_id')==$section->id)selected @endif>{{ $section->name }} · {{ $section->market->name }}@if($section->status==='inactive') (Inactive)@endif</option>@endforeach</select></div>
+ <div><label for="location_type">Stall location</label><select id="location_type" name="location_type"><option value="">All locations</option>@foreach(['inner'=>'Inner','outer'=>'Outer','unclassified'=>'Unclassified'] as $value=>$label)<option value="{{ $value }}" @if(request('location_type')===$value)selected @endif>{{ $label }}</option>@endforeach</select></div>
+ @can('tenants.view')<div><label for="business_category_id">Business category</label><select id="business_category_id" name="business_category_id"><option value="">All categories</option>@foreach($businessCategories as $category)<option value="{{ $category->id }}" @if(request('business_category_id')==$category->id)selected @endif>{{ $category->name }}</option>@endforeach</select></div>@endcan
+ <div><label for="status">Occupancy</label><select id="status" name="status"><option value="">All statuses</option>@foreach(['occupied','vacant','reserved','maintenance','inactive'] as $status)<option value="{{ $status }}" @if(request('status')===$status)selected @endif>{{ ucfirst($status) }}</option>@endforeach</select></div>
+ <button class="btn secondary">Apply filters</button><a class="text-sm underline py-3" href="{{ route('records.index','stalls') }}">Clear</a>
+ </form>
+ <div class="tablewrap"><table><thead><tr><th>Stall / section</th><th>Area / location</th><th>Occupancy</th>@can('tenants.view')<th>Tenant / business</th>@endcan @can('billing.view')<th>Agreed rental</th>@endcan<th>Actions</th></tr></thead><tbody>
+ @forelse($records as $record)
+ @php($assignment=$record->currentAssignment)
+ @php($assessment=$assignment && $assignment->agreement ? $assignment->agreement->assessment : null)
+-<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ $record->section->name }}</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
++<tr><td><strong>{{ $record->code }}</strong><div class="text-xs text-slate-600">{{ $record->market->name }} · {{ optional($record->section)->name ?: 'Unknown section' }}@if(optional($record->section)->status==='inactive') (Inactive)@endif</div><div class="text-xs">{{ optional($record->category)->name ?: $record->classification }}</div></td><td>{{ $record->area }} sq. m.<br><span class="badge">{{ $record->location_type ? ucfirst($record->location_type) : 'Unclassified' }}</span></td><td>{{ ucfirst($record->status) }}</td>
+ @can('tenants.view')<td>@if($assignment)<a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id]) }}">{{ $assignment->tenant->name }}</a><br>{{ optional($assignment->business)->name ?: 'Individual stallholder' }}<div class="text-xs text-slate-600">{{ $assignment->business ? optional($assignment->business->businessCategory)->name : 'Business not linked' }}</div>@else<span class="text-slate-500">Unassigned</span>@endif</td>@endcan
+ @can('billing.view')<td>@if($assessment)<span>PHP {{ $assessment->rental_rate_sqm }} / sq. m. / day</span><br>PHP {{ $assessment->daily_rental }} daily<div class="text-xs text-slate-600">{{ ucfirst($assessment->location_type) }} assessment · {{ $assessment->period }}</div>@elseif($assignment && $assignment->agreement)<span>PHP {{ $assignment->agreement->monthly_amount }} / month</span><div class="text-xs text-slate-600">Legacy agreement</div>@else<span class="text-slate-500">No assessment</span>@endif</td>@endcan
+ <td><div class="flex flex-wrap gap-3"><a class="text-blue-800 underline" href="{{ route('records.show',['stalls',$record->id]) }}">View</a>@can('update',$record)<a class="text-blue-800 underline" href="{{ route('records.edit',['stalls',$record->id]) }}">Edit</a>@endcan</div></td></tr>
+ @empty<tr><td colspan="6" class="empty">No stalls match these filters.</td></tr>@endforelse
+ </tbody></table></div><div class="mt-5">{{ $records->links() }}</div>
+ </section>
+ @endsection
+--- before/resources/views/stalls/section-picker.blade.php
++++ after/resources/views/stalls/section-picker.blade.php
+@@ -0,0 +1,23 @@
++<div data-section-picker data-options-url="{{ route('stalls.section-options',['market'=>'MARKET_ID']) }}">
++    <select id="market_section_id" name="market_section_id" aria-describedby="stall-section-feedback">
++        <option value="">Choose a section</option>
++        @foreach($options['market_section_id'] as $section)
++            <option value="{{ $section->id }}" @if($selectedSectionId == $section->id) selected @endif>{{ $section->name }} · {{ $section->code }}</option>
++        @endforeach
++        @if($retainedSection && $retainedSection->market_id == old('market_id',$record->market_id))
++            <option data-retained-market="{{ $retainedSection->market_id }}" value="{{ $retainedSection->id }}" @if($selectedSectionId == $retainedSection->id) selected @endif>{{ $retainedSection->name }} · {{ $retainedSection->code }} (Inactive · Retained)</option>
++        @endif
++    </select>
++    <div data-section-search-wrap hidden>
++        <label for="search_sections">Search sections</label>
++        <input type="search" id="search_sections" placeholder="Section name or code" autocomplete="off" aria-controls="market_section_id">
++    </div>
++    <p id="stall-section-feedback" class="text-xs text-slate-600 mt-2" role="status"></p>
++    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mt-1">
++        <button type="button" class="text-blue-800 underline py-2" data-refresh-sections hidden>Refresh sections</button>
++        @can('sections.manage')
++            <a class="text-blue-800 underline py-2" data-add-section data-create-url="{{ route('records.create','sections') }}" target="_blank" rel="noopener"
++               href="{{ route('records.create',['type'=>'sections','market_id'=>old('market_id',$record->market_id),'from_stall'=>1]) }}">Add section in new tab</a>
++        @endcan
++    </div>
++</div>
+--- before/routes/web.php
++++ after/routes/web.php
+@@ -22,20 +22,22 @@
+     Route::post("/login", [AuthController::class, "login"])->middleware("throttle:20,1");
+ });
+ Route::middleware(["auth", \App\Http\Middleware\ActiveAccount::class])->group(function () {
+     Route::post("/logout", [AuthController::class, "logout"])->name("logout");
+     Route::get("/dashboard", DashboardController::class)->name("dashboard");
+     Route::get("/manage/{type}", [RecordController::class, "index"])->name("records.index");
+     Route::get("/manage/{type}/create", [RecordController::class, "create"])->name(
+         "records.create",
+     );
+     Route::post("/manage/{type}", [RecordController::class, "store"])->name("records.store");
++    Route::post('/manage/sections/order', [RecordController::class, 'reorderSections'])->name('sections.order');
++    Route::get('/manage/stalls/section-options/{market}', [RecordController::class, 'stallSectionOptions'])->name('stalls.section-options');
+     Route::get("/manage/{type}/{id}/edit", [RecordController::class, "edit"])->name("records.edit");
+     Route::put("/manage/{type}/{id}", [RecordController::class, "update"])->name("records.update");
+     Route::get("/manage/{type}/{id}", [RecordController::class, "show"])->name("records.show");
+     Route::get("/map", [MapController::class, "index"])->name("map");
+     Route::get("/map/stalls/{stall}", [MapController::class, "details"])->name("map.details");
+     Route::get("/map/layout/{market}", [MapController::class, "editor"])->name("map.editor");
+     Route::post("/map/layout/{market}", [MapController::class, "save"])->name("map.save");
+     Route::get("/assignments", [AssignmentController::class, "index"])->name("assignments.index");
+     Route::get("/assignments/create", [AssignmentController::class, "create"])->name(
+         "assignments.create",
+--- before/tests/Feature/SectionManagementTest.php
++++ after/tests/Feature/SectionManagementTest.php
+@@ -0,0 +1,247 @@
++<?php
++
++namespace Tests\Feature;
++
++use App\Models\{AuditLog, Market, MarketLayout, MarketSection, Stall, StallLayoutPosition, Tenant, User};
++use Database\Seeders\RoleSeeder;
++use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Facades\{Artisan, DB};
++use Spatie\Permission\Models\{Permission, Role};
++use Tests\TestCase;
++
++class SectionManagementTest extends TestCase
++{
++    use RefreshDatabase;
++
++    public function test_section_master_counts_and_metadata(): void
++    {
++        $actor = $this->operator('Market Administrator');
++        $market = $this->market('A');
++        $this->post('/manage/sections', $this->sectionData($market, 'A', 'Fruit Hall') + [
++            'description' => 'Fictional produce', 'color' => '#2366AC', 'sort_order' => 8,
++        ])->assertRedirect()->assertSessionHasNoErrors();
++        $section = $market->sections()->firstOrFail();
++        $this->assertDatabaseHas('market_sections', [
++            'id' => $section->id, 'description' => 'Fictional produce', 'color' => '#2366AC',
++            'sort_order' => 8, 'created_by' => $actor->id, 'updated_by' => $actor->id,
++        ]);
++        $other = $this->section($market, 'B', 'Grains');
++        $this->stall($section, 'O', 'occupied');
++        $this->stall($section, 'V');
++        $this->stall($section, 'M', 'maintenance');
++        $url = '/manage/sections/'.$section->id;
++        $this->get($url)->assertOk()->assertSee('Fictional produce')->assertViewHas('record', function ($section) {
++            return (int) $section->stalls_count === 3 && (int) $section->occupied_count === 1
++                && (int) $section->vacant_count === 1 && (int) $section->maintenance_count === 1
++                && (int) $section->reserved_count === 0 && (int) $section->inactive_count === 0;
++        });
++        $this->put($url, $this->sectionData($market, 'A', 'Fruit Hall', 'inactive'))->assertSessionHasErrors('status');
++        $this->put('/manage/sections/'.$other->id, $this->sectionData($market, 'B', 'Grains', 'inactive'))
++            ->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame('inactive', $other->refresh()->status);
++        $this->post('/manage/sections/order', ['market_id' => $market->id, 'ids' => [$section->id, $other->id]])
++            ->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertTrue($section->refresh()->sort_order < $other->refresh()->sort_order);
++        $this->assertDatabaseHas('audit_logs', ['action' => 'sections.reordered', 'entity_id' => $section->id, 'actor_id' => $actor->id]);
++        $this->get('/manage/sections?market_id='.$market->id)->assertOk()->assertSeeInOrder(['Fruit Hall', 'Grains']);
++        $this->get('/manage/sections?q=B&status=inactive&market_id='.$market->id)->assertOk()->assertSee('Grains')->assertDontSee('Fruit Hall');
++    }
++
++    public function test_section_duplicates_and_existing_ambiguous_spelling(): void
++    {
++        $this->operator();
++        $a = $this->market('A');
++        $b = $this->market('B');
++        $legacy = $this->section($a, 'A', "  Dry\t Goods ");
++        $sibling = $this->section($a, 'B', 'DRY GOODS');
++        $this->post('/manage/sections', $this->sectionData($a, 'C', 'dry   goods'))->assertSessionHasErrors('name');
++        $this->post('/manage/sections', $this->sectionData($a, 'A', 'Different'))->assertSessionHasErrors('code');
++        $this->post('/manage/sections', $this->sectionData($b, 'A', 'dry goods'))->assertRedirect()->assertSessionHasNoErrors();
++        $this->put('/manage/sections/'.$legacy->id, $this->sectionData($a, 'A', "Dry\t Goods") + ['description' => 'Updated notes'])
++            ->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame("  Dry\t Goods ", $legacy->refresh()->name);
++        $this->put('/manage/sections/'.$sibling->id, $this->sectionData($a, 'B', 'Dry Goods'))->assertSessionHasErrors('name');
++        $padded = $this->section($b, ' P ', 'Warehouse');
++        $this->put('/manage/sections/'.$padded->id, $this->sectionData($b, 'P', 'Warehouse'))
++            ->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame(' P ', $padded->refresh()->code);
++        $this->post('/manage/sections', $this->sectionData($a, 'C', 'Different') + ['color' => 'red', 'sort_order' => -1])
++            ->assertSessionHasErrors(['color', 'sort_order']);
++        $this->post('/manage/sections/order', ['market_id' => $a->id, 'ids' => [$legacy->id, $b->sections()->value('id')]])
++            ->assertSessionHasErrors('ids');
++    }
++
++    public function test_stall_options_and_backend_reject_inactive_or_other_market_sections(): void
++    {
++        $this->operator();
++        $a = $this->market('A');
++        $b = $this->market('B');
++        $active = $this->section($a, 'A', 'Fictional local active');
++        $inactive = $this->section($a, 'B', 'Fictional local inactive', 'inactive');
++        $foreign = $this->section($b, 'A', 'Fictional foreign active');
++        $this->get('/manage/stalls/create?market_id='.$a->id)->assertOk()->assertSee($active->name)
++            ->assertDontSee($foreign->name)->assertDontSee($inactive->name)->assertSee('Search sections');
++        $this->getJson('/manage/stalls/section-options/'.$a->id)->assertOk()->assertJsonCount(1)
++            ->assertJsonPath('0.id', $active->id);
++        $data = ['market_id' => $a->id, 'code' => 'NEW', 'classification' => 'Fictional', 'area' => '10.00', 'location_type' => 'inner', 'status' => 'vacant'];
++        foreach ([$foreign, $inactive] as $unavailable) {
++            $this->post('/manage/stalls', $data + ['market_section_id' => $unavailable->id])->assertSessionHasErrors('market_section_id');
++        }
++        $existing = $this->stall($inactive, 'EXISTING');
++        $this->get('/manage/stalls/'.$existing->id.'/edit')->assertOk()->assertSee($inactive->name)->assertSee('Retained');
++        $this->put('/manage/stalls/'.$existing->id, $data + ['market_section_id' => $inactive->id])->assertRedirect()->assertSessionHasNoErrors();
++        $this->assertSame($inactive->id, $existing->refresh()->market_section_id);
++        $this->get('/assignments/create')->assertOk()->assertDontSee('NEW');
++        $mismatched = $this->stall($foreign, 'MISMATCH');
++        $mismatched->update(['market_id' => $a->id]);
++        $this->get('/assignments/create')->assertOk()->assertDontSee('MISMATCH');
++        $tenant = Tenant::create(['reference' => 'FIX', 'name' => 'Fictional tenant']);
++        $business = $tenant->businesses()->create(['name' => 'Fictional business']);
++        foreach ([$existing, $mismatched] as $ineligible) {
++            $this->post('/assignments', ['stall_id' => $ineligible->id, 'tenant_id' => $tenant->id, 'business_id' => $business->id,
++                'start_date' => today()->toDateString(), 'agreement_reference' => 'FIC-0001'])->assertSessionHasErrors('assignment');
++        }
++        $this->assertDatabaseCount('stall_assignments', 0);
++        $this->get('/manage/stalls?section_id='.$inactive->id)->assertOk()->assertSee('NEW');
++    }
++
++    public function test_section_rename_map_preserves_coordinates(): void
++    {
++        $this->operator();
++        $market = $this->market('A');
++        $section = $this->section($market, 'A', 'Old hall');
++        $stall = $this->stall($section, 'MAP-1');
++        $layout = MarketLayout::create(['market_id' => $market->id, 'name' => 'Fictional market layout']);
++        $position = StallLayoutPosition::create(['market_layout_id' => $layout->id, 'stall_id' => $stall->id, 'column' => 3, 'row' => 2, 'width' => 2, 'height' => 1]);
++        $before = $position->fresh()->getAttributes();
++        $this->put('/manage/sections/'.$section->id, $this->sectionData($market, 'A', 'New hall') + ['color' => '#2366AC'])
++            ->assertRedirect()->assertSessionHasNoErrors();
++        $this->get('/map?market_id='.$market->id.'&section_id='.$section->id)->assertOk()
++            ->assertSee('New hall')->assertSee('Section summary')->assertSee('#2366AC')->assertSee('grid-column:3 / span 2')->assertDontSee('Old hall');
++        $this->get('/map/stalls/'.$stall->id)->assertOk()->assertSee('New hall');
++        $this->assertSame($before, $position->fresh()->getAttributes());
++        $this->assertSame($section->id, $stall->refresh()->market_section_id);
++        $audit = AuditLog::where('action', 'sections.updated')->where('entity_id', $section->id)->firstOrFail();
++        $this->assertSame('Old hall', $audit->old_values['name']);
++        $this->assertSame('New hall', $audit->new_values['name']);
++    }
++
++    public function test_section_routes_enforce_permissions_and_preserve_referenced_records(): void
++    {
++        $actor = $this->operator();
++        $a = $this->market('A');
++        $b = $this->market('B');
++        $section = $this->section($a, 'A', 'Fictional hall');
++        $stall = $this->stall($section, 'PROTECTED');
++        $elsewhere = $this->section($a, 'B', 'Fictional annex');
++        $tenant = Tenant::create(['reference' => 'HIST', 'name' => 'Historical fictional tenant']);
++        $stall->assignments()->create(['tenant_id' => $tenant->id, 'authorized_by' => $actor->id,
++            'status' => 'ended', 'start_date' => '2024-01-01', 'end_date' => '2024-02-05']);
++        $url = '/manage/sections/'.$section->id;
++        $this->put($url, $this->sectionData($b, 'A', 'Fictional hall'))->assertSessionHasErrors('market_id');
++        $this->put('/manage/stalls/'.$stall->id, ['market_id' => $a->id, 'market_section_id' => $elsewhere->id,
++            'code' => $stall->code, 'classification' => $stall->classification, 'area' => $stall->area,
++            'location_type' => $stall->location_type, 'status' => $stall->status])->assertSessionHasErrors('record');
++        $this->delete($url)->assertStatus(405);
++        $this->assertSame($section->id, $stall->refresh()->market_section_id);
++        $viewer = $this->operator('LGU Management Viewer');
++        $this->get('/manage/sections')->assertOk();
++        $this->get($url)->assertOk();
++        $this->get('/manage/sections/create')->assertForbidden();
++        $this->get($url.'/edit')->assertForbidden();
++        $this->post('/manage/sections/order', ['market_id' => $a->id, 'ids' => [$section->id]])->assertForbidden();
++        $this->put($url, $this->sectionData($a, 'A', 'Renamed'))->assertForbidden();
++        $this->getJson('/manage/stalls/section-options/'.$a->id)->assertForbidden();
++        $legacy = Role::create(['name' => 'Fictional custom role']);
++        $legacy->givePermissionTo(['markets.view', 'markets.manage']);
++        $viewer->syncRoles([$legacy]);
++        $this->actingAs($viewer->fresh())->get('/manage/sections')->assertForbidden();
++        $this->seed(RoleSeeder::class);
++        $this->assertFalse($legacy->fresh()->hasPermissionTo('sections.view'));
++        $admin = Role::findByName('Market Administrator');
++        $admin->revokePermissionTo(Permission::findByName('sections.manage'));
++        $this->seed(RoleSeeder::class);
++        $this->assertFalse($admin->fresh()->hasPermissionTo('sections.manage'));
++    }
++
++    public function test_populated_metadata_upgrade_and_read_only_reconciliation(): void
++    {
++        $this->withoutMockingConsoleOutput();
++        $original = DB::getDefaultConnection();
++        config(['database.connections.section_upgrade' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true]]);
++        DB::setDefaultConnection('section_upgrade');
++        try {
++            foreach (['2014_10_12_000000_create_users_table.php' => 'CreateUsersTable', '2026_11_17_000001_create_market_schema.php' => 'CreateMarketSchema'] as $file => $class) {
++                require_once database_path('migrations/'.$file);
++                (new $class)->up();
++            }
++            DB::table('markets')->insert([['id' => 1, 'code' => 'A', 'name' => 'Fictional'], ['id' => 2, 'code' => 'B', 'name' => 'Fictional other']]);
++            DB::table('market_sections')->insert([['id' => 9, 'market_id' => 1, 'name' => 'Dry  goods', 'code' => 'A'], ['id' => 10, 'market_id' => 1, 'name' => 'DRY GOODS', 'code' => 'B'], ['id' => 11, 'market_id' => 2, 'name' => '<info>Fictional section</info>', 'code' => 'C']]);
++            DB::table('stalls')->insert([['id' => 5, 'market_id' => 1, 'market_section_id' => 9, 'code' => 'SYN', 'classification' => 'Synthetic'], ['id' => 6, 'market_id' => 2, 'market_section_id' => 9, 'code' => 'WRONG', 'classification' => 'Synthetic']]);
++            DB::table('market_layouts')->insert(['id' => 7, 'market_id' => 1, 'name' => 'Fictional']);
++            DB::table('stall_layout_positions')->insert(['stall_id' => 5, 'market_layout_id' => 7, 'row' => 4, 'column' => 3]);
++            DB::table('users')->insert(['id' => 1, 'name' => 'Fictional treasurer', 'email' => 'fixture@example.test', 'password' => 'unused']);
++            DB::table('tenants')->insert(['id' => 1, 'reference' => 'FTC', 'name' => 'Fictional tenant for preservation']);
++            DB::table('stall_assignments')->insert(['id' => 1, 'stall_id' => 5, 'tenant_id' => 1, 'authorized_by' => 1, 'start_date' => '2024-01-01']);
++            DB::table('rental_bills')->insert(['id' => 1, 'reference' => 'FIC-BILL', 'stall_assignment_id' => 1, 'tenant_id' => 1,
++                'stall_id' => 5, 'period' => '2024-01', 'due_date' => '2024-01-31', 'amount' => '100.23', 'status' => 'posted', 'created_by' => 1]);
++            DB::table('payments')->insert(['id' => 1, 'reference' => 'FIC-PAY', 'tenant_id' => 1, 'payment_date' => '2024-01-31',
++                'amount' => '50.12', 'method' => 'cash', 'receipt_reference' => 'FIC-001', 'idempotency_key' => 'synthetic-payment-key',
++                'request_hash' => 'synthetic-request-hash', 'status' => 'posted', 'recorded_by' => 1]);
++            DB::table('payment_allocations')->insert(['payment_id' => 1, 'rental_bill_id' => 1, 'amount' => '50.12']);
++            $before = (array) DB::table('market_sections')->where('id', 9)->first();
++            $this->assertTrue(class_exists(\App\Console\Commands\ReconcileSections::class), 'The upgrade needs a read-only reconciliation command available before metadata migration.');
++            $this->assertSame(0, Artisan::call('sections:reconcile'));
++            $beforeReport = json_decode(Artisan::output(), true, 512, JSON_THROW_ON_ERROR);
++            $this->assertSame([9, 10], $beforeReport['normalized_duplicate_groups'][0]['section_ids']);
++            $this->assertSame(1, $beforeReport['counts']['market_mismatched_stall_sections']);
++            $this->assertSame('<info>Fictional section</info>', $beforeReport['sections_by_market'][2][0]['name']);
++            $this->assertSame('100.23', $beforeReport['preservation_controls']['financial']['posted_bill_amount']);
++            $this->assertSame('50.12', $beforeReport['preservation_controls']['financial']['effective_payment_allocation_amount']);
++            $this->assertSame('50.11', $beforeReport['preservation_controls']['financial']['posted_outstanding_balance']);
++            require_once database_path('migrations/2026_11_19_000001_enhance_market_sections.php');
++            (new \EnhanceMarketSections())->up();
++            $this->assertSame(0, Artisan::call('sections:reconcile'));
++            $afterReport = json_decode(Artisan::output(), true, 512, JSON_THROW_ON_ERROR);
++            $this->assertSame($beforeReport['preservation_controls'], $afterReport['preservation_controls']);
++            $after = (array) DB::table('market_sections')->where('id', 9)->first();
++            $this->assertSame($before, array_intersect_key($after, $before));
++            $this->assertSame(0, $after['sort_order']);
++            $this->assertNull($after['created_by']);
++            $this->assertSame([], DB::select('PRAGMA foreign_key_check'));
++        } finally {
++            DB::disconnect('section_upgrade');
++            DB::setDefaultConnection($original);
++        }
++    }
++
++    private function operator(string $role = 'Super Administrator'): User
++    {
++        $this->seed(RoleSeeder::class);
++        $user = User::create(['name' => 'Fictional operator', 'email' => User::count().'@example.test', 'password' => 'unused', 'active' => true]);
++        $user->assignRole($role);
++        $this->actingAs($user);
++        return $user;
++    }
++
++    private function market(string $code): Market
++    {
++        return Market::create(['code' => $code, 'name' => 'Fictional Market '.$code]);
++    }
++
++    private function sectionData(Market $market, string $code, string $name, string $status = 'active'): array
++    {
++        return ['market_id' => $market->id, 'code' => $code, 'name' => $name, 'status' => $status];
++    }
++
++    private function section(Market $market, string $code, string $name, string $status = 'active'): MarketSection
++    {
++        return MarketSection::create($this->sectionData($market, $code, $name, $status));
++    }
++
++    private function stall(MarketSection $section, string $code, string $status = 'vacant'): Stall
++    {
++        return Stall::create(['market_id' => $section->market_id, 'market_section_id' => $section->id, 'code' => $code,
++            'classification' => 'Fictional', 'area' => '5.00', 'location_type' => 'inner', 'status' => $status]);
++    }
++}

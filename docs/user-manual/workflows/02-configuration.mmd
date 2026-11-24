@@ -1,0 +1,18 @@
+flowchart TD
+    N0["MIS / administrator: Complete authorized local setup and forward migrations."]
+    N1["Super Administrator: Create named active accounts and assign roles."]
+    N0 --> N1
+    N1 -->|Validation fails| F1["Keep one active Super Administrator."]
+    N2["Market administrator: Create active markets, sections and physical stall categories."]
+    N1 --> N2
+    N3["Stall manager: Register coded stalls with verified area and Inner or Outer location."]
+    N2 --> N3
+    N3 -->|Validation fails| F3["Verify unclassified inventory before new assessment."]
+    N4["Rate manager: Prepare dated category schedules and market rental policy drafts."]
+    N3 --> N4
+    N5["Rate approver: Review current terms and approve authorized revisions."]
+    N4 --> N5
+    N5 -->|Validation fails| F5["Reload changed drafts and review again before approving."]
+    N6["Layout / template managers: Save the market grid and arrange approved original DOCX review."]
+    N5 --> N6
+    N6 -->|Validation fails| F6["Issuance needs separate numbering, rental and review authority."]

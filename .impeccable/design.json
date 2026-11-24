@@ -1,0 +1,487 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-17T06:45:19.115918+00:00",
+  "title": "Design System: MarketHub",
+  "extensions": {
+    "colorMeta": {
+      "navy": {
+        "role": "primary",
+        "displayName": "Navy",
+        "tonalRamp": [
+          "oklch(15.00% 0.05556 255.73)",
+          "oklch(26.43% 0.05556 255.73)",
+          "oklch(37.86% 0.05556 255.73)",
+          "oklch(49.29% 0.05556 255.73)",
+          "oklch(60.71% 0.05556 255.73)",
+          "oklch(72.14% 0.05556 255.73)",
+          "oklch(83.57% 0.05556 255.73)",
+          "oklch(95.00% 0.05556 255.73)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "brand": {
+        "role": "primary",
+        "displayName": "Brand",
+        "tonalRamp": [
+          "oklch(15.00% 0.18644 259.33)",
+          "oklch(26.43% 0.18644 259.33)",
+          "oklch(37.86% 0.18644 259.33)",
+          "oklch(49.29% 0.18644 259.33)",
+          "oklch(60.71% 0.18644 259.33)",
+          "oklch(72.14% 0.18644 259.33)",
+          "oklch(83.57% 0.18644 259.33)",
+          "oklch(95.00% 0.18644 259.33)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "brand-hover": {
+        "role": "primary",
+        "displayName": "Brand Hover",
+        "tonalRamp": [
+          "oklch(15.00% 0.18087 265.64)",
+          "oklch(26.43% 0.18087 265.64)",
+          "oklch(37.86% 0.18087 265.64)",
+          "oklch(49.29% 0.18087 265.64)",
+          "oklch(60.71% 0.18087 265.64)",
+          "oklch(72.14% 0.18087 265.64)",
+          "oklch(83.57% 0.18087 265.64)",
+          "oklch(95.00% 0.18087 265.64)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "navigation-active": {
+        "role": "primary",
+        "displayName": "Navigation Active",
+        "tonalRamp": [
+          "oklch(15.00% 0.07632 252.66)",
+          "oklch(26.43% 0.07632 252.66)",
+          "oklch(37.86% 0.07632 252.66)",
+          "oklch(49.29% 0.07632 252.66)",
+          "oklch(60.71% 0.07632 252.66)",
+          "oklch(72.14% 0.07632 252.66)",
+          "oklch(83.57% 0.07632 252.66)",
+          "oklch(95.00% 0.07632 252.66)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas",
+        "tonalRamp": [
+          "oklch(15.00% 0.00740 260.73)",
+          "oklch(26.43% 0.00740 260.73)",
+          "oklch(37.86% 0.00740 260.73)",
+          "oklch(49.29% 0.00740 260.73)",
+          "oklch(60.71% 0.00740 260.73)",
+          "oklch(72.14% 0.00740 260.73)",
+          "oklch(83.57% 0.00740 260.73)",
+          "oklch(95.00% 0.00740 260.73)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "tonalRamp": [
+          "oklch(15.00% 0.00000 89.88)",
+          "oklch(26.43% 0.00000 89.88)",
+          "oklch(37.86% 0.00000 89.88)",
+          "oklch(49.29% 0.00000 89.88)",
+          "oklch(60.71% 0.00000 89.88)",
+          "oklch(72.14% 0.00000 89.88)",
+          "oklch(83.57% 0.00000 89.88)",
+          "oklch(95.00% 0.00000 89.88)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border",
+        "tonalRamp": [
+          "oklch(15.00% 0.01262 255.51)",
+          "oklch(26.43% 0.01262 255.51)",
+          "oklch(37.86% 0.01262 255.51)",
+          "oklch(49.29% 0.01262 255.51)",
+          "oklch(60.71% 0.01262 255.51)",
+          "oklch(72.14% 0.01262 255.51)",
+          "oklch(83.57% 0.01262 255.51)",
+          "oklch(95.00% 0.01262 255.51)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "field-border": {
+        "role": "neutral",
+        "displayName": "Field Border",
+        "tonalRamp": [
+          "oklch(15.00% 0.01985 252.89)",
+          "oklch(26.43% 0.01985 252.89)",
+          "oklch(37.86% 0.01985 252.89)",
+          "oklch(49.29% 0.01985 252.89)",
+          "oklch(60.71% 0.01985 252.89)",
+          "oklch(72.14% 0.01985 252.89)",
+          "oklch(83.57% 0.01985 252.89)",
+          "oklch(95.00% 0.01985 252.89)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.03685 260.03)",
+          "oklch(26.43% 0.03685 260.03)",
+          "oklch(37.86% 0.03685 260.03)",
+          "oklch(49.29% 0.03685 260.03)",
+          "oklch(60.71% 0.03685 260.03)",
+          "oklch(72.14% 0.03685 260.03)",
+          "oklch(83.57% 0.03685 260.03)",
+          "oklch(95.00% 0.03685 260.03)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15.00% 0.03745 257.28)",
+          "oklch(26.43% 0.03745 257.28)",
+          "oklch(37.86% 0.03745 257.28)",
+          "oklch(49.29% 0.03745 257.28)",
+          "oklch(60.71% 0.03745 257.28)",
+          "oklch(72.14% 0.03745 257.28)",
+          "oklch(83.57% 0.03745 257.28)",
+          "oklch(95.00% 0.03745 257.28)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "subtle": {
+        "role": "neutral",
+        "displayName": "Subtle",
+        "tonalRamp": [
+          "oklch(15.00% 0.00341 247.86)",
+          "oklch(26.43% 0.00341 247.86)",
+          "oklch(37.86% 0.00341 247.86)",
+          "oklch(49.29% 0.00341 247.86)",
+          "oklch(60.71% 0.00341 247.86)",
+          "oklch(72.14% 0.00341 247.86)",
+          "oklch(83.57% 0.00341 247.86)",
+          "oklch(95.00% 0.00341 247.86)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "blue-soft": {
+        "role": "neutral",
+        "displayName": "Blue Soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.01418 254.60)",
+          "oklch(26.43% 0.01418 254.60)",
+          "oklch(37.86% 0.01418 254.60)",
+          "oklch(49.29% 0.01418 254.60)",
+          "oklch(60.71% 0.01418 254.60)",
+          "oklch(72.14% 0.01418 254.60)",
+          "oklch(83.57% 0.01418 254.60)",
+          "oklch(95.00% 0.01418 254.60)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "blue-ink": {
+        "role": "neutral",
+        "displayName": "Blue Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.13776 265.52)",
+          "oklch(26.43% 0.13776 265.52)",
+          "oklch(37.86% 0.13776 265.52)",
+          "oklch(49.29% 0.13776 265.52)",
+          "oklch(60.71% 0.13776 265.52)",
+          "oklch(72.14% 0.13776 265.52)",
+          "oklch(83.57% 0.13776 265.52)",
+          "oklch(95.00% 0.13776 265.52)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "occupied-soft": {
+        "role": "status",
+        "displayName": "Occupied Soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.02068 166.11)",
+          "oklch(26.43% 0.02068 166.11)",
+          "oklch(37.86% 0.02068 166.11)",
+          "oklch(49.29% 0.02068 166.11)",
+          "oklch(60.71% 0.02068 166.11)",
+          "oklch(72.14% 0.02068 166.11)",
+          "oklch(83.57% 0.02068 166.11)",
+          "oklch(95.00% 0.02068 166.11)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "occupied-ink": {
+        "role": "status",
+        "displayName": "Occupied Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.08647 166.91)",
+          "oklch(26.43% 0.08647 166.91)",
+          "oklch(37.86% 0.08647 166.91)",
+          "oklch(49.29% 0.08647 166.91)",
+          "oklch(60.71% 0.08647 166.91)",
+          "oklch(72.14% 0.08647 166.91)",
+          "oklch(83.57% 0.08647 166.91)",
+          "oklch(95.00% 0.08647 166.91)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "vacant-soft": {
+        "role": "status",
+        "displayName": "Vacant Soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.00685 247.90)",
+          "oklch(26.43% 0.00685 247.90)",
+          "oklch(37.86% 0.00685 247.90)",
+          "oklch(49.29% 0.00685 247.90)",
+          "oklch(60.71% 0.00685 247.90)",
+          "oklch(72.14% 0.00685 247.90)",
+          "oklch(83.57% 0.00685 247.90)",
+          "oklch(95.00% 0.00685 247.90)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "vacant-ink": {
+        "role": "status",
+        "displayName": "Vacant Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.03916 257.29)",
+          "oklch(26.43% 0.03916 257.29)",
+          "oklch(37.86% 0.03916 257.29)",
+          "oklch(49.29% 0.03916 257.29)",
+          "oklch(60.71% 0.03916 257.29)",
+          "oklch(72.14% 0.03916 257.29)",
+          "oklch(83.57% 0.03916 257.29)",
+          "oklch(95.00% 0.03916 257.29)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "reserved-soft": {
+        "role": "status",
+        "displayName": "Reserved Soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.02140 95.28)",
+          "oklch(26.43% 0.02140 95.28)",
+          "oklch(37.86% 0.02140 95.28)",
+          "oklch(49.29% 0.02140 95.28)",
+          "oklch(60.71% 0.02140 95.28)",
+          "oklch(72.14% 0.02140 95.28)",
+          "oklch(83.57% 0.02140 95.28)",
+          "oklch(95.00% 0.02140 95.28)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "reserved-ink": {
+        "role": "status",
+        "displayName": "Reserved Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.10536 45.90)",
+          "oklch(26.43% 0.10536 45.90)",
+          "oklch(37.86% 0.10536 45.90)",
+          "oklch(49.29% 0.10536 45.90)",
+          "oklch(60.71% 0.10536 45.90)",
+          "oklch(72.14% 0.10536 45.90)",
+          "oklch(83.57% 0.10536 45.90)",
+          "oklch(95.00% 0.10536 45.90)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "maintenance-soft": {
+        "role": "status",
+        "displayName": "Maintenance Soft",
+        "tonalRamp": [
+          "oklch(15.00% 0.01295 17.38)",
+          "oklch(26.43% 0.01295 17.38)",
+          "oklch(37.86% 0.01295 17.38)",
+          "oklch(49.29% 0.01295 17.38)",
+          "oklch(60.71% 0.01295 17.38)",
+          "oklch(72.14% 0.01295 17.38)",
+          "oklch(83.57% 0.01295 17.38)",
+          "oklch(95.00% 0.01295 17.38)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      },
+      "maintenance-ink": {
+        "role": "status",
+        "displayName": "Maintenance Ink",
+        "tonalRamp": [
+          "oklch(15.00% 0.16132 26.90)",
+          "oklch(26.43% 0.16132 26.90)",
+          "oklch(37.86% 0.16132 26.90)",
+          "oklch(49.29% 0.16132 26.90)",
+          "oklch(60.71% 0.16132 26.90)",
+          "oklch(72.14% 0.16132 26.90)",
+          "oklch(83.57% 0.16132 26.90)",
+          "oklch(95.00% 0.16132 26.90)"
+        ],
+        "rampPurpose": "Synthesized preview ramp; implementation uses the named frontmatter color."
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page heading",
+        "purpose": "24px/32px; increases to 30px/36px at 1024px."
+      },
+      "body": {
+        "displayName": "Operational body",
+        "purpose": "14px/20px for routine UI and tables; browser body baseline is 16px."
+      }
+    },
+    "shadows": [
+      {
+        "name": "stall-hover",
+        "value": "0 0 0 2px #1d67d7",
+        "purpose": "Interaction ring; panels remain flat."
+      },
+      {
+        "name": "stall-selected",
+        "value": "0 0 0 2px #ffffff, 0 0 0 4px #1d67d7",
+        "purpose": "Selected stall with white ring offset."
+      }
+    ],
+    "focus": {
+      "outline": "3px solid #1d67d7",
+      "outlineOffset": "3px"
+    },
+    "motion": [
+      {
+        "name": "stall-ring",
+        "value": "box-shadow .15s ease-out",
+        "purpose": "Hover ring; only when reduced motion is not requested."
+      },
+      {
+        "name": "detail-enter",
+        "value": "translateX(6px) to translateX(0), .18s ease-out",
+        "purpose": "Loaded details; only when reduced motion is not requested."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "xl",
+        "value": "1280px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Shared primary action with a 44px minimum target.",
+      "html": "<button class=\"ds-button-primary\">Review record</button>",
+      "css": ".ds-button-primary{font-family:\"Segoe UI\",Arial,sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 16px;border:0;border-radius:8px;background:#1d67d7;color:#fff;font-size:14px;line-height:20px;font-weight:600;cursor:pointer}.ds-button-primary:hover{background:#1e40af}.ds-button-primary:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}.ds-button-primary:disabled{opacity:.5;cursor:wait}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Shared secondary action with a 44px minimum target.",
+      "html": "<button class=\"ds-button-secondary\">Review record</button>",
+      "css": ".ds-button-secondary{font-family:\"Segoe UI\",Arial,sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 16px;border:0;border-radius:8px;background:#eff6ff;color:#1e3a8a;font-size:14px;line-height:20px;font-weight:600;cursor:pointer}.ds-button-secondary:hover{background:#dbeafe}.ds-button-secondary:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}.ds-button-secondary:disabled{opacity:.5;cursor:wait}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Shared danger action with a 44px minimum target.",
+      "html": "<button class=\"ds-button-danger\">Review record</button>",
+      "css": ".ds-button-danger{font-family:\"Segoe UI\",Arial,sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 16px;border:0;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:14px;line-height:20px;font-weight:600;cursor:pointer}.ds-button-danger:hover{background:#fee2e2}.ds-button-danger:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}.ds-button-danger:disabled{opacity:.5;cursor:wait}"
+    },
+    {
+      "name": "Labeled Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Explicit labels accompany financial and record fields.",
+      "html": "<label class=\"ds-label\" for=\"ds-reference\">Treasury reference</label><input class=\"ds-input\" id=\"ds-reference\" placeholder=\"Enter reference\">",
+      "css": ".ds-label{font-family:\"Segoe UI\",Arial,sans-serif;display:block;font-size:14px;line-height:20px;font-weight:500;color:#334155;margin:12px 0 4px}.ds-input{font-family:\"Segoe UI\",Arial,sans-serif;width:100%;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:10px 12px;font-size:14px;line-height:20px;color:#0f172a;caret-color:#1d67d7}.ds-input::placeholder{color:#64748b}.ds-input:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Navy rail with pale links and a highlighted current page.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Main navigation\"><a class=\"ds-navlink\" href=\"#dashboard\">Dashboard</a><a class=\"ds-navlink ds-current\" href=\"#map\" aria-current=\"page\">Interactive Market Map</a></nav>",
+      "css": ".ds-nav{background:#11253f;padding:20px}.ds-navlink{font-family:\"Segoe UI\",Arial,sans-serif;display:block;border-radius:8px;padding:10px 12px;font-size:14px;line-height:20px;color:#dbeafe;text-decoration:none}.ds-navlink+.ds-navlink{margin-top:4px}.ds-navlink:hover,.ds-navlink.ds-current{background:#24466c;color:#fff}.ds-current{font-weight:600}.ds-navlink:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}"
+    },
+    {
+      "name": "Occupancy Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Text reinforces the status color; this example is occupied.",
+      "html": "<span class=\"ds-badge\">Occupied</span>",
+      "css": ".ds-badge{font-family:\"Segoe UI\",Arial,sans-serif;display:inline-block;border-radius:9999px;padding:4px 10px;background:#ecfdf5;color:#065f46;font-size:12px;line-height:16px;font-weight:600}"
+    },
+    {
+      "name": "Record Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Flat white surface with a fine border and responsive padding.",
+      "html": "<section class=\"ds-panel\"><h2 class=\"ds-title\">Stall details</h2><p class=\"ds-copy\">Select a stall to view its record.</p></section>",
+      "css": ".ds-panel{font-family:\"Segoe UI\",Arial,sans-serif;border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:20px;color:#1e293b}.ds-title{margin:0;font-size:18px;line-height:28px;font-weight:600;color:#11253f}.ds-copy{font-size:14px;line-height:20px;color:#475569}@media(min-width:1024px){.ds-panel{padding:24px}}"
+    },
+    {
+      "name": "Market Stall",
+      "kind": "custom",
+      "refersTo": "stall",
+      "description": "Status-colored selectable tile with explicit occupancy and selection state.",
+      "html": "<button class=\"ds-stall\" aria-pressed=\"false\"><strong class=\"ds-code\">A-01</strong><span class=\"ds-status\">Occupied</span></button>",
+      "css": ".ds-stall{font-family:\"Segoe UI\",Arial,sans-serif;min-height:76px;border:1px solid #a7f3d0;border-radius:8px;padding:12px;background:#ecfdf5;color:#065f46;text-align:center;cursor:pointer}.ds-code{display:block;font-size:14px;line-height:20px;font-weight:700}.ds-status{display:block;margin-top:8px;font-size:12px;line-height:16px}.ds-stall:hover{box-shadow:0 0 0 2px #1d67d7}.ds-stall[aria-pressed=true]{box-shadow:0 0 0 2px #fff,0 0 0 4px #1d67d7}.ds-stall:focus-visible{outline:3px solid #1d67d7;outline-offset:3px}@media(prefers-reduced-motion:no-preference){.ds-stall{transition:box-shadow .15s ease-out}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Market Operations Desk",
+    "overview": "MarketHub keeps the visual identity of the supplied prototype: a navy navigation rail, blue actions, a light work surface and white bordered panels. The interface supports repeat visits by LGU staff working with stalls, tenants and financial records on desktop and tablet. Its character is practical, compact and readable.\n\nSystem typography, clear labels and familiar controls carry the work. The market grid is the signature visual surface; occupancy colors make it scannable while adjacent or stacked details explain the selected record. New screens inherit this established grammar rather than introducing a separate visual concept or imagery.",
+    "keyCharacteristics": [
+      "Navy navigation and blue action emphasis.",
+      "White bordered panels on a light canvas.",
+      "Compact tables with readable numbers and explicit labels.",
+      "Occupancy colors paired with status text.",
+      "Desktop and tablet layouts with visible keyboard focus."
+    ],
+    "rules": [
+      {
+        "name": "The Separate Status Rule",
+        "body": "Occupancy colors describe the stall; payment status remains separate and explicitly labeled.",
+        "section": "colors"
+      },
+      {
+        "name": "The Readable Record Rule",
+        "body": "Keep table numbers aligned with tabular numerals and retain explicit field labels when space is constrained.",
+        "section": "typography"
+      },
+      {
+        "name": "The Preserve the Record Rule",
+        "body": "Let wide tables and maps scroll locally instead of squeezing their contents until labels and amounts become unreadable.",
+        "section": "layout"
+      },
+      {
+        "name": "The State Before Shadow Rule",
+        "body": "Use rings for interaction state and borders for panel boundaries.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do preserve the prototype's navy navigation, blue actions and light bordered workspace.",
+      "Do retain Segoe UI / Arial system typography and the compact readable type hierarchy.",
+      "Do pair occupancy colors with written status and keep financial status separate.",
+      "Do maintain visible keyboard focus, explicit labels and local overflow for wide records."
+    ],
+    "donts": [
+      "Don't replace the established interface with a new visual concept or decorative imagery.",
+      "Don't use occupancy color as evidence of payment status.",
+      "Don't compress table content or map labels to avoid horizontal scrolling.",
+      "Don't add decorative card shadows to the flat panel system."
+    ]
+  }
+}

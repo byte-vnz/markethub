@@ -1,0 +1,2 @@
+# Fail closed until Apache maps the application to public/.
+Require all denied

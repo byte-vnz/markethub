@@ -1,0 +1,445 @@
+Changed files (6):
+app/Http/Controllers/AdminController.php
+app/Models/AuditLog.php
+app/Services/RentalCalculationService.php
+app/Services/RentalOverrideService.php
+app/Services/Reports.php
+tests/Feature/RentalOverrideTest.php
+
+File comparison review package (no Git repository). Base: .qa\sections-overrides-checkpoint\after-task-2.zip
+--- before/app/Http/Controllers/AdminController.php
++++ after/app/Http/Controllers/AdminController.php
+@@ -71,21 +71,21 @@
+                     "role" => $d["role"],
+                     "active" => $d["active"],
+                 ],
+             );
+         }, 3);
+         return back()->with("success", "Account and role saved.");
+     }
+     public function audit(Request $r)
+     {
+         $this->authorize("audit.view");
+-        $q = AuditLog::with("actor");
++        $q = AuditLog::visibleTo($r->user())->with("actor");
+         if ($r->filled("q")) {
+             $q->where("action", "like", "%" . substr($r->q, 0, 80) . "%");
+         }
+         return view("admin.audit", ["logs" => $q->latest()->paginate(30)->withQueryString()]);
+     }
+     public function settings()
+     {
+         $this->authorize("settings.manage");
+         return view("admin.settings", ["settings" => SystemSetting::pluck("value", "key")]);
+     }
+--- before/app/Models/AuditLog.php
++++ after/app/Models/AuditLog.php
+@@ -1,17 +1,26 @@
+ <?php
+ namespace App\Models;
+ use Illuminate\Database\Eloquent\Model;
+ class AuditLog extends Model
+ {
+     protected $guarded = ["id"];
+     protected $casts = ["old_values" => "array", "new_values" => "array"];
++    public function scopeVisibleTo($query, ?User $actor)
++    {
++        if (!$actor || !$actor->can(['rentals.override.view', 'rentals.override.history'])) {
++            $query->where('action', '!=', 'assessment.override_applied')->where(function ($query) {
++                $query->whereNull('entity_type')->orWhere('entity_type', '!=', 'RentalOverride');
++            });
++        }
++        return $query;
++    }
+     public function actor()
+     {
+         return $this->belongsTo(User::class, "actor_id");
+     }
+     protected static function booted()
+     {
+         static::updating(function () {
+             throw new \LogicException("Audit records are immutable.");
+         });
+         static::deleting(function () {
+--- before/app/Services/RentalCalculationService.php
++++ after/app/Services/RentalCalculationService.php
+@@ -261,35 +261,58 @@
+                 $initial = optional($agreement)->assessment;
+                 $this->check((bool) $initial, "assessment", "Renew this assignment to use an approved category assessment.");
+                 $this->check($assignment->start_date <= $last && (!$assignment->end_date || $assignment->end_date >= $first),
+                     "period", "The reference month must overlap the assignment term.");
+                 if ($purpose === "billing") {
+                     $this->check($period <= today()->format("Y-m") && $assignment->start_date <= $first &&
+                         (!$assignment->end_date || $assignment->end_date >= $last),
+                         "period", "An assessment for a bill requires an eligible full month.");
+                 }
+                 $resolved = $this->forAssignment($assignment, $period);
++                $peer = RentalAssessment::where('stall_assignment_id', $assignment->id)->where('period', $period)
++                    ->where('purpose', $purpose === 'billing' ? 'contract' : 'billing')->lockForUpdate()->first();
++                if ($peer) {
++                    $this->check($this->financialBasis($peer->only(self::ASSESSMENT_COLUMNS) + $peer->basis) === $this->financialBasis($resolved),
++                        'assessment', 'A saved assessment for this month has a different financial basis. Review the existing obligations.');
++                }
+                 $values = Arr::only($resolved, self::ASSESSMENT_COLUMNS);
+                 $values["effective_from"] = $initial->effective_from;
+                 $values["effective_until"] = $initial->effective_until;
+                 $values["basis"] = Arr::except($resolved, self::ASSESSMENT_COLUMNS);
+                 $values["snapshot"] = $initial->snapshot;
+             }
+             $assessment = RentalAssessment::create($values + [
+                 "stall_assignment_id" => $assignment->id, "period" => $period, "purpose" => $purpose,
+                 "created_by" => $actor->id,
+             ]);
+             if ($assessment->rental_override_id) {
+                 Audit::record($actor, 'assessment.override_applied', $assessment, [], $assessment->getAttributes());
+             }
+             return $assessment;
+         }, 3);
++    }
++
++    private function financialBasis(array $data): array
++    {
++        // Legacy automatic snapshots predate the explicit comparison columns. Their own saved amounts are authoritative.
++        if ($data['computation_mode'] === 'automatic') {
++            $data['automatic_rate_per_sqm'] = $data['automatic_rate_per_sqm'] ?? $data['rental_rate_sqm'];
++            $data['automatic_daily_rental'] = $data['automatic_daily_rental'] ?? $data['daily_rental'];
++        }
++        $basis = Arr::except(Arr::only($data, self::ASSESSMENT_COLUMNS), [
++            'market_name', 'stall_code', 'business_category_name', 'market_section_id', 'market_section_name',
++        ]) + Arr::only($data, ['billing_day_rule', 'fixed_billing_days', 'advance_deposit_authorized',
++            'policy_reference', 'rate_reference', 'policy_effective_from', 'policy_effective_until',
++            'rate_effective_from', 'rate_effective_until']);
++        $basis['approval_fingerprint'] = $data['override']['approval_fingerprint'] ?? null;
++        ksort($basis);
++        return $basis;
+     }
+ 
+     private function check($ok, $field, $message): void
+     {
+         if (!$ok) {
+             throw ValidationException::withMessages([$field => $message]);
+         }
+     }
+ 
+     public function calculate($area, $ratePerSqm, $dailyCusa, $billingDays)
+--- before/app/Services/RentalOverrideService.php
++++ after/app/Services/RentalOverrideService.php
+@@ -43,25 +43,29 @@
+ 
+     private function transition(RentalOverride $request, callable $operation): RentalOverride
+     {
+         return $this->locked(StallAssignment::findOrFail($request->stall_assignment_id), function ($a, $initial) use ($request, $operation) {
+             $current = RentalOverride::where('stall_assignment_id', $a->id)->lockForUpdate()->findOrFail($request->id);
+             $this->check((int) $current->initial_assessment_id === (int) $initial->id, 'assessment', 'The agreement basis has changed.');
+             return $operation($current, $a, $initial);
+         });
+     }
+ 
+-    private function eligible(StallAssignment $a, RentalAssessment $initial, array $input): void
++    private function eligible(StallAssignment $a, RentalAssessment $initial): void
+     {
+         $this->check($a->status === 'active' && $a->tenant->status === 'active' && $a->business &&
+             $a->business->status === 'active' && (int) $a->business->tenant_id === (int) $a->tenant_id &&
+             (int) $a->business_id === (int) $initial->business_id, 'stall_assignment_id', 'Choose an active assignment with its assessed business and tenant.');
++    }
++
++    private function checkOwnership(StallAssignment $a, array $input): void
++    {
+         foreach (['tenant_id' => $a->tenant_id, 'business_id' => $a->business_id, 'stall_id' => $a->stall_id, 'stall_assignment_id' => $a->id] as $key => $id) {
+             $this->check(!array_key_exists($key, $input) || ((is_string($input[$key]) || is_int($input[$key])) && (string) $input[$key] === (string) $id),
+                 $key, 'The selected record does not belong to this assignment.');
+         }
+     }
+ 
+     private function dates(StallAssignment $a, string $start, ?string $end): void
+     {
+         $this->boundary($a, $start, 'effective_from');
+         $this->check(!$end || $end === Carbon::parse($end)->endOfMonth()->toDateString(), 'effective_until', 'Choose the last day of a full month.');
+@@ -73,45 +77,48 @@
+         $first = today()->day === 1 ? today() : today()->addMonthNoOverflow()->startOfMonth();
+         $this->check(substr($day, -2) === '01' && $day >= $first->toDateString(), $field,
+             'Choose a prospective first of the month, beginning '.$first->toDateString().'.');
+         $this->check($day >= $a->start_date && (!$a->end_date || $day <= $a->end_date), $field, 'Choose a month within the assignment term.');
+     }
+ 
+     public function preview(User $actor, StallAssignment $assignment, array $data): array
+     {
+         $this->authorize($actor, 'request');
+         return $this->locked($assignment, function ($a, $initial) use ($data) {
+-            $this->eligible($a, $initial, $data);
++            $this->checkOwnership($a, $data);
++            $this->eligible($a, $initial);
+             Validator::make($data, ['period' => 'required|date_format:Y-m', 'override_type' => 'required|in:rate_per_sqm,daily_amount'])->validate();
+             app(RentalCalculationService::class)->guardReferenceMonth($a, $data['period']);
+             return ['computation_mode' => 'proposed', 'rental_override_id' => null] + app(RentalCalculationService::class)
+                 ->proposedAmounts($initial, $data['period'], $data['override_type'], $data['override_rate_per_sqm'] ?? null, $data['override_daily_amount'] ?? null);
+         });
+     }
+ 
+     public function saveDraft(User $actor, StallAssignment $assignment, array $data, ?RentalOverride $override = null): RentalOverride
+     {
+         $this->authorize($actor, 'request');
++        if (isset($data['effective_until']) && is_string($data['effective_until']) && trim($data['effective_until']) === '') {
++            $data['effective_until'] = null;
++        }
+         Validator::make($data, [
+             'submission_key' => ($override ? 'sometimes' : 'required').'|uuid',
+             'override_type' => 'required|in:rate_per_sqm,daily_amount', 'effective_from' => 'required|date_format:Y-m-d',
+             'effective_until' => 'nullable|date_format:Y-m-d|after_or_equal:effective_from',
+             'reason' => 'required|string|max:1000', 'remarks' => 'nullable|string|max:2000', 'reference_document' => 'nullable|string|max:255',
+             'source_override_id' => 'nullable|integer|min:1', 'draft_fingerprint' => 'sometimes|string|size:64',
+         ])->validate();
+         return $this->locked($assignment, function ($a, $initial) use ($actor, $data, $override) {
+-            $this->eligible($a, $initial, $data);
++            $this->checkOwnership($a, $data);
+             $terms = Arr::only($data, self::TERMS) + array_fill_keys(self::TERMS, null);
+             foreach (['reason', 'reference_document', 'remarks'] as $field) {
+                 $terms[$field] = isset($terms[$field]) ? trim($terms[$field]) : null;
+             }
+-            $this->dates($a, $terms['effective_from'], $terms['effective_until']);
+             $values = $this->amountsForTerm($initial, $terms);
+             $field = $terms['override_type'] === 'daily_amount' ? 'override_daily_amount' : 'override_rate_per_sqm';
+             $terms[$field] = Money::normalize($terms[$field]);
+             $terms['source_override_id'] = $terms['source_override_id'] ? (int) $terms['source_override_id'] : null;
+             ksort($terms);
+             $hash = hash('sha256', serialize([$a->id, $actor->id, $terms]));
+             if ($override) {
+                 $row = RentalOverride::where('stall_assignment_id', $a->id)->lockForUpdate()->findOrFail($override->id);
+                 abort_unless((int) $row->requested_by === (int) $actor->id, 403);
+                 $this->check($row->status === 'draft', 'status', 'Only a draft may be edited. Create a new request for revised terms.');
+@@ -132,40 +139,42 @@
+                 }
+                 if ($terms['source_override_id']) {
+                     $this->check(RentalOverride::where('stall_assignment_id', $a->id)->whereKey($terms['source_override_id'])
+                         ->where('status', '!=', 'draft')->lockForUpdate()->first(), 'source_override_id', 'Select a submitted source request for this assignment.');
+                 }
+                 $last = RentalOverride::where('stall_assignment_id', $a->id)->orderByDesc('revision')->lockForUpdate()->first();
+                 $row = new RentalOverride(['stall_assignment_id' => $a->id, 'initial_assessment_id' => $initial->id,
+                     'submission_key' => $data['submission_key'], 'revision' => $last ? $last->revision + 1 : 1,
+                     'requested_by' => $actor->id, 'status' => 'draft']);
+             }
++            $this->eligible($a, $initial);
++            $this->dates($a, $terms['effective_from'], $terms['effective_until']);
+             $old = $row->getRawOriginal();
+             $row->fill($terms + Arr::only($values, ['automatic_rate_per_sqm','automatic_daily_rental','rental_difference']) +
+                 ['proposed_daily_rental' => $values['daily_rental'], 'updated_by' => $actor->id, 'request_hash' => $hash])->save();
+             Audit::record($actor, $row->wasRecentlyCreated && $row->source_override_id ? 'rental_override.revised' : 'rental_override.draft_saved',
+                 $row, $old, $row->getAttributes(), $row->reason);
+             return $row->refresh();
+         });
+     }
+ 
+     public function submit(User $actor, RentalOverride $override): RentalOverride
+     {
+         $this->authorize($actor, 'request');
+         return $this->transition($override, function ($row, $a, $initial) use ($actor, $override) {
+             abort_unless((int) $row->requested_by === (int) $actor->id, 403);
+             $this->check(hash_equals($row->request_hash, $override->request_hash), 'draft_fingerprint', 'Review the changed draft before submission.');
+             if ($row->status === 'pending') {
+                 return $row;
+             }
+             $this->check($row->status === 'draft', 'status', 'Only a draft may be submitted.');
+-            $this->eligible($a, $initial, []);
++            $this->eligible($a, $initial);
+             $this->dates($a, $row->effective_from, $row->effective_until);
+             return $this->record($actor, $row, ['status' => 'pending', 'submitted_at' => now()], 'submitted', $row->reason);
+         });
+     }
+ 
+     // Only a single approved revision may cover any part of the requested interval.
+     public static function approvalPolicy(RentalOverride $override): ?RentalPolicy
+     {
+         $query = RentalPolicy::where('market_id', $override->initialAssessment->market_id)
+             ->whereIn('status', ['approved','retired'])->whereNotNull('approved_at')->whereNotNull('approved_by')
+@@ -212,21 +221,21 @@
+ 
+     public function approve(User $actor, RentalOverride $override, string $fingerprint): RentalOverride
+     {
+         $this->authorize($actor, 'approve');
+         return $this->transition($override, function ($row, $a, $initial) use ($actor, $fingerprint) {
+             if ($row->status === 'approved' && (int) $row->approved_by === (int) $actor->id && hash_equals($row->approval_fingerprint, $fingerprint)) {
+                 return $row;
+             }
+             $this->check($row->status === 'pending', 'status', 'Only a pending request may be approved.');
+             $this->check((int) $row->requested_by !== (int) $actor->id, 'approved_by', 'A different authorized user must review and approve the request.');
+-            $this->eligible($a, $initial, []);
++            $this->eligible($a, $initial);
+             $this->dates($a, $row->effective_from, $row->effective_until);
+             $review = self::review($row);
+             $this->check(hash_equals($review['fingerprint'], $fingerprint), 'fingerprint', 'Review the current request, assessment and effective policy before approval.');
+             $policy = $review['policy'];
+             $this->check($policy, 'rental_policy', 'One approved policy must cover the entire requested period. Open-ended requests require open-ended authority.');
+             $value = $this->amountsForTerm($initial, $row->only(self::TERMS));
+             if ($value['out_of_range'] || $value['zero_rent']) {
+                 $this->check(trim((string) $row->reference_document) !== '' && trim((string) $policy['override_authority_reference']) !== '' &&
+                     (!$value['out_of_range'] || $policy['allow_out_of_range_overrides']) && (!$value['zero_rent'] || $policy['allow_zero_rent_overrides']),
+                     'override_authority', 'The proposed exception requires explicit policy authorization and both policy and request references.');
+--- before/app/Services/Reports.php
++++ after/app/Services/Reports.php
+@@ -1,12 +1,13 @@
+ <?php
+ namespace App\Services;
++use App\Models\AuditLog;
+ use Illuminate\Support\Facades\DB;
+ class Reports
+ {
+     public const TYPES = [
+         "stall-master" => ["Stall Master List", "reports.view"],
+         "occupied-stalls" => ["Occupied Stall Report", "reports.view"],
+         "vacant-stalls" => ["Vacant Stall Report", "reports.view"],
+         "tenant-master" => ["Tenant Master List", "reports.personal"],
+         "assignment-history" => ["Stall Assignment History", "reports.personal"],
+         "monthly-billing" => ["Monthly Rental Billing", "reports.financial"],
+@@ -238,21 +239,21 @@
+         } elseif ($type === "rate-history") {
+             $q = DB::table("rental_rates AS r")
+                 ->join("markets AS m", "m.id", "=", "r.market_id")
+                 ->selectRaw(
+                     "m.name AS market,r.classification,r.amount,r.effective_from,r.effective_until,r.approval_reference,r.status",
+                 )
+                 ->orderBy("r.effective_from");
+             $date = "r.effective_from";
+             $marketColumn = "r.market_id";
+         } else {
+-            $q = DB::table("audit_logs AS a")
++            $q = AuditLog::visibleTo(auth()->user())->toBase()->from('audit_logs AS a')
+                 ->leftJoin("users AS u", "u.id", "=", "a.actor_id")
+                 ->selectRaw(
+                     "a.created_at,u.name AS actor,a.action,a.entity_type,a.entity_id,a.reason",
+                 )
+                 ->orderByDesc("a.id");
+             $date = "a.created_at";
+         }
+         foreach (
+             [
+                 "market_id" => $marketColumn,
+--- before/tests/Feature/RentalOverrideTest.php
++++ after/tests/Feature/RentalOverrideTest.php
+@@ -374,20 +374,127 @@
+     {
+         $this->policy->update(['billing_day_rule' => 'calendar', 'fixed_billing_days' => null]);
+         $renewed = app(AssignmentService::class)->transfer($this->actor, $this->assignment, ['stall_id' => $this->assignment->stall_id,
+             'business_id' => $this->assignment->business_id, 'start_date' => '2030-01-01', 'reason' => 'Synthetic calendar renewal', 'agreement_reference' => 'C']);
+         $data = $this->data(['override_type' => 'daily_amount', 'override_rate_per_sqm' => null, 'override_daily_amount' => '11000000000.00']);
+         $this->invalid('total_initial_payment', fn () => $this->service()->saveDraft($this->actor, $renewed, $data));
+         $feb = $this->service()->saveDraft($this->actor, $renewed, $data + ['effective_until' => '2030-02-28']);
+         $this->assertSame('draft', $feb->status);
+     }
+ 
++    /** @dataProvider auditVisibility */
++    public function test_override_audit_query_requires_both_permissions_across_outputs($permissions, $visible)
++    {
++        $reason = 'Sensitive fictional rental explanation';
++        $this->pending(['reason' => $reason]);
++        \App\Services\Audit::record($this->actor, 'synthetic.general', null, [], [], 'Visible system activity');
++        \App\Services\Audit::record($this->actor, 'assessment.override_applied', $this->assignment->agreement->assessment);
++        \App\Services\Audit::record($this->actor, 'synthetic.assignment', $this->assignment, [], [], 'Visible assignment activity');
++        $user = User::create(['name' => 'Auditor', 'email' => 'auditor@example.test', 'password' => 'unused', 'active' => true]);
++        $user->givePermissionTo(array_merge(['audit.view'], $permissions));
++        $this->actingAs($user);
++        foreach (['/audit', '/reports/audit-trail', '/reports/audit-trail?format=csv', '/reports/audit-trail?format=print'] as $url) {
++            $r = $this->get($url)->assertOk();
++            $content = strpos($url, 'format=csv') !== false ? $r->streamedContent() : $r->getContent();
++            $this->assertStringContainsString('Visible system activity', $content);
++            $this->assertStringContainsString('Visible assignment activity', $content);
++            $this->assertSame($visible, strpos($content, $reason) !== false, $url);
++            $this->assertSame($visible, strpos($content, 'assessment.override_applied') !== false, $url);
++        }
++        $this->assertDatabaseHas('audit_logs', ['entity_type' => 'RentalOverride', 'reason' => $reason]);
++    }
++
++    public function auditVisibility()
++    {
++        return [[[], false], [['rentals.override.view'], false], [['rentals.override.history'], false],
++            [['rentals.override.view', 'rentals.override.history'], true]];
++    }
++
++    public function test_committed_draft_retries_after_date_and_assignment_change()
++    {
++        $data = $this->data(['effective_from' => '2030-01-01']);
++        $s = $this->service();
++        $draft = $s->saveDraft($this->actor, $this->assignment, $data);
++        Carbon::setTestNow('2030-01-02');
++        $this->assertSame($draft->id, $s->saveDraft($this->actor, $this->assignment, $data)->id);
++        app(AssignmentService::class)->end($this->actor, $this->assignment, '2030-01-02', 'Synthetic end');
++        $this->assertSame($draft->id, $s->saveDraft($this->actor, $this->assignment, $data)->id);
++        $this->invalid('submission_key', fn () => $s->saveDraft($this->actor, $this->assignment, array_replace($data, ['reason' => 'Changed'])));
++        $this->invalid('submission_key', fn () => $s->saveDraft($this->reviewer, $this->assignment, $data));
++        $this->invalid('tenant_id', fn () => $s->saveDraft($this->actor, $this->assignment, $data + ['tenant_id' => 999]));
++        $this->assertDatabaseCount('rental_overrides', 1);
++    }
++
++    public function test_blank_end_is_open_and_retries_canonically()
++    {
++        $data = $this->data(['effective_until' => '']);
++        $draft = $this->service()->saveDraft($this->actor, $this->assignment, $data);
++        $this->assertNull($draft->effective_until);
++        $this->assertSame($draft->id, $this->service()->saveDraft($this->actor, $this->assignment, array_replace($data, ['effective_until' => null]))->id);
++        $this->approve($this->service()->submit($this->actor, $draft));
++        $this->assertSame('250.00', app(RentalCalculationService::class)->forAssignment($this->assignment, '2030-03')['daily_rental']);
++    }
++
++    /** @dataProvider peerPurposes */
++    public function test_cross_purpose_checks_financial_basis_before_writing($first, $second)
++    {
++        $calc = app(RentalCalculationService::class);
++        $peer = $calc->assess($this->actor, $this->assignment, '2030-01', $first);
++        // Simulate an imported historical snapshot with conflicting financial terms.
++        \Illuminate\Support\Facades\DB::table('rental_assessments')->where('id', $peer->id)->update(['monthly_cusa' => '90.00']);
++        $before = $peer->fresh()->getRawOriginal();
++        $this->invalid('assessment', fn () => $calc->assess($this->actor, $this->assignment, '2030-01', $second));
++        $this->assertSame($before, $calc->assess($this->actor, $this->assignment, '2030-01', $first)->getRawOriginal());
++        $this->assertDatabaseCount('rental_assessments', 2);
++    }
++
++    public function peerPurposes()
++    {
++        return [['billing','contract'], ['contract','billing']];
++    }
++
++    public function test_cross_purpose_accepts_matching_legacy_automatic_snapshot()
++    {
++        $calc = app(RentalCalculationService::class);
++        $peer = $calc->assess($this->actor, $this->assignment, '2030-01', 'billing');
++        \Illuminate\Support\Facades\DB::table('rental_assessments')->where('id', $peer->id)->update([
++            'automatic_daily_rental' => null, 'automatic_rate_per_sqm' => null, 'market_section_id' => null,
++            'market_section_name' => null, 'basis' => json_encode($this->assignment->agreement->assessment->basis),
++        ]);
++        $second = $calc->assess($this->actor, $this->assignment, '2030-01', 'contract');
++        $this->assertSame('268.80', $second->daily_rental);
++        $this->assertSame('268.80', $second->automatic_daily_rental);
++        $this->assertNull($peer->fresh()->automatic_daily_rental);
++    }
++
++    public function test_cross_purpose_checks_override_identity_even_when_rent_matches()
++    {
++        $row = $this->approve($this->pending(['effective_from' => '2030-01-01', 'override_rate_per_sqm' => '26.88']));
++        $calc = app(RentalCalculationService::class);
++        $peer = $calc->assess($this->actor, $this->assignment, '2030-01', 'contract');
++        $this->assertEquals($row->id, $peer->rental_override_id);
++        \Illuminate\Support\Facades\DB::table('rental_assessments')->where('id', $peer->id)->update(['rental_override_id' => null]);
++        $this->invalid('assessment', fn () => $calc->assess($this->actor, $this->assignment, '2030-01', 'billing'));
++    }
++
++    public function test_cross_purpose_accepts_same_approval_after_future_revocation()
++    {
++        $override = $this->approve($this->pending(['effective_from' => '2030-01-01']));
++        $calc = app(RentalCalculationService::class);
++        $lease = $calc->assess($this->actor, $this->assignment, '2030-01', 'contract');
++        $this->service()->revoke($this->reviewer, $override, ['revocation_effective_from' => '2030-02-01', 'reason' => 'Future return']);
++        $bill = $calc->assess($this->actor, $this->assignment, '2030-01', 'billing');
++        $this->assertSame($lease->rental_override_id, $bill->rental_override_id);
++        $this->assertSame('7800.00', $bill->total_monthly_rental_cusa);
++        $this->assertNull($lease->fresh()->basis['override']['revocation_effective_from']);
++    }
++
+     public function test_whole_policy_period_overlap_cancellation_and_retirement()
+     {
+         $req = $this->pending();
+         $this->policy->update(['effective_until' => '2030-12-31']);
+         $this->invalid('rental_policy', fn () => $this->approve($req));
+         $this->policy->update(['effective_until' => null]);
+         $approved = $this->approve($req);
+         $other = $this->pending(['effective_from' => '2030-03-01']);
+         $this->invalid('effective_from', fn () => $this->approve($other));
+         $retire = fn () => app(BusinessCategoryService::class)->retire($this->reviewer, $this->policy, [
