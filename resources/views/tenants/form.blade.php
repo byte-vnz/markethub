@@ -78,9 +78,17 @@
     </section>
     <section class="panel mt-5 scroll-mt-4" id="rental">
         <h2>Rental preview</h2>
-        @can('rentals.override.request')<p class="text-sm text-slate-600 mt-2">After confirming a stall assignment, open Rental Information on the tenant record to request a manual override.</p>@endcan
+        @unless(config('billing.fixed_day_enabled'))
+            @can('rentals.override.request')<p class="text-sm text-slate-600 mt-2">After confirming a stall assignment, open Rental Information on the tenant record to request a manual override.</p>@endcan
+        @endunless
         @can('assignments.manage')
-            <p class="text-sm text-slate-600 mt-2">The approved business-category rate uses the minimum for Inner and maximum for Outer. The server checks the rate and market policy again when you confirm.</p>
+            <p class="text-sm text-slate-600 mt-2">The approved business-category rate uses the minimum for Inner and maximum for Outer.
+                @if(config('billing.fixed_day_enabled'))
+                    Confirming rechecks the approved rate, interval and stall availability. Additional concurrent occupancy requires separate approval.
+                @else
+                    The server checks the rate and market policy again when you confirm.
+                @endif
+            </p>
             <p class="text-sm text-slate-600 mt-3" data-preview-empty>Choose a business, stall and start date to preview the rental.</p>
             <div class="mt-3" aria-live="polite" data-previews></div>
         @else

@@ -35,6 +35,18 @@ class RentalAssessment extends Model
         return $this->belongsTo(StallAssignment::class, "stall_assignment_id");
     }
 
+    public function isFixedDays(): bool
+    {
+        return ($this->basis['billing_cycle'] ?? 'monthly') === 'fixed_days';
+    }
+
+    public function periodLabel(): string
+    {
+        return $this->isFixedDays()
+            ? $this->period.' – '.\Carbon\Carbon::parse($this->period)->addDays($this->billing_days - 1)->toDateString()
+            : $this->period;
+    }
+
     protected static function booted()
     {
         static::updating(function () {

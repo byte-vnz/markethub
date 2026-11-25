@@ -1,7 +1,7 @@
 <?php
 namespace App\Services;
 use App\Models\{AuditLog, RentalOverride};
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\{DB, Schema};
 class Reports
 {
     public const TYPES = [
@@ -10,7 +10,7 @@ class Reports
         "vacant-stalls" => ["Vacant Stall Report", "reports.view"],
         "tenant-master" => ["Tenant Master List", "reports.personal"],
         "assignment-history" => ["Stall Assignment History", "reports.personal"],
-        "monthly-billing" => ["Monthly Rental Billing", "reports.financial"],
+        "monthly-billing" => ["Rental Billing", "reports.financial"],
         "collection-summary" => ["Rental Collection Summary", "reports.view"],
         "daily-collections" => ["Daily Collections", "reports.view"],
         "collections-by-cashier" => ["Collections by Cashier", "reports.financial"],
@@ -120,6 +120,11 @@ class Reports
                 )
                 ->orderBy("b.period")
                 ->orderBy("b.id");
+            if (Schema::hasColumn('rental_bills', 'coverage_start')) {
+                $q->leftJoin('rental_assessments AS ra', 'ra.id', '=', 'b.rental_assessment_id')
+                    ->addSelect('b.coverage_start', 'b.coverage_end')
+                    ->selectRaw('CASE WHEN b.coverage_start IS NOT NULL THEN ra.monthly_cusa END AS record_only_cusa');
+            }
             if (in_array($type, ["receivables", "overdue"])) {
                 $q->whereRaw(Ledger::balanceSql("b") . ">0");
             }
@@ -228,10 +233,15 @@ class Reports
             $date = 'r.effective_from';
         } elseif ($type === 'rental-assessments') {
             $sectionSnapshot = DB::connection()->getQueryGrammar()->wrap('ra.basis->stall_section_name');
+            $fixedDays = 'LENGTH(ra.period) = 10';
+            $end = DB::connection()->getDriverName() === 'sqlite'
+                ? "DATE(ra.period, '+' || (ra.billing_days - 1) || ' days')"
+                : 'DATE_ADD(ra.period, INTERVAL (ra.billing_days - 1) DAY)';
             $q = DB::table('rental_assessments AS ra')
                 ->join('stall_assignments AS a','a.id','=','ra.stall_assignment_id')
                 ->join('stalls AS s','s.id','=','a.stall_id')
-                ->selectRaw('ra.id AS assessment,ra.period,ra.purpose,a.tenant_id,ra.market_name AS assessed_market,ra.stall_code AS assessed_stall,ra.business_category_name,ra.location_type,ra.floor_area,ra.minimum_rate,ra.maximum_rate,ra.rental_rate_sqm AS applied_rate,ra.daily_rental,ra.billing_days,ra.monthly_rental,ra.daily_cusa,ra.monthly_cusa,ra.total_monthly_rental_cusa,ra.business_category_rental_rate_id AS rate_schedule,ra.rental_policy_id AS policy,ra.created_at')
+                ->selectRaw('ra.id AS assessment,ra.period,ra.purpose,a.tenant_id,ra.market_name AS assessed_market,ra.stall_code AS assessed_stall,ra.business_category_name,ra.location_type,ra.floor_area,ra.minimum_rate,ra.maximum_rate,ra.rental_rate_sqm AS applied_rate,ra.daily_rental,ra.billing_days,ra.monthly_rental AS period_rent,ra.daily_cusa,ra.monthly_cusa AS period_cusa,ra.total_monthly_rental_cusa AS period_payable,ra.business_category_rental_rate_id AS rate_schedule,ra.rental_policy_id AS policy,ra.created_at')
+                ->selectRaw("CASE WHEN {$fixedDays} THEN ra.period END AS coverage_start, CASE WHEN {$fixedDays} THEN {$end} END AS coverage_end, CASE WHEN {$fixedDays} THEN 'Records only' ELSE 'Chargeable' END AS cusa_treatment")
                 ->selectRaw("COALESCE(ra.market_section_name, {$sectionSnapshot}) AS assessed_section")
                 ->orderByDesc('ra.id');
             if ($canSeeAssessmentMode) {

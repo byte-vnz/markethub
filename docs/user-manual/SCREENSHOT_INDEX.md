@@ -77,3 +77,12 @@ Figure31 reuses the actual posted-bill capture shown in Figure16. Figures07/38 r
 
 - [Narrow-screen navigation fallback](screenshots/authentication/64-mobile-navigation-fallback.png) · 375 × 900, shared script blocked in the fictional preview.
 - [Terminate contract confirmation](screenshots/contracts/66-termination-confirmation.png) · 375 × 900, cancelled on a fictional document.
+
+## Fixed-day billing (v1.4)
+
+| Figure | Fictional application capture | Dimensions |
+| --- | --- | --- |
+| 67 | [Seven-day assignment form](screenshots/stalls/67-fixed-day-assignment.png) | 1440 × 970 |
+| 68 | [Nine-day registration preview showing base rent and recorded CUSA](screenshots/tenants/68-fixed-day-preview.png) | 1440 × 970 |
+| 69 | [Fixed-day generation form with the interval start and due date](screenshots/payments/69-fixed-day-generation.png) | 1440 × 970 |
+| 70 | [Posted 1–7 November bill with coverage and record-only CUSA](screenshots/payments/70-fixed-day-bill.png) | 1440 × 970 |

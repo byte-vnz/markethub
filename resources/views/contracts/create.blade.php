@@ -3,7 +3,8 @@
 @section('subtitle','The draft uses the selected assignment’s frozen category, permitted goods and rental basis.')
 @section('content')
 @if($templates->isEmpty())<div class="notice error">An authorized template manager must register and approve the supplied DOCX.</div>@endif
-@if($assignments->isEmpty())<div class="notice">An active assignment with an approved rental assessment is required. Renew a legacy assignment before preparing its new contract.</div>@endif
+@if($hasFixedDayAssignments)<div class="notice">The approved monthly template is unavailable for fixed-day agreements.</div>@endif
+@if($assignments->isEmpty())<div class="notice">An active monthly assignment with an approved rental assessment is required.</div>@endif
 <form method="post" action="{{ route('contracts.store') }}" class="space-y-5">
     @csrf
     @if($selectedTenant)<input type="hidden" name="tenant_id" value="{{ $selectedTenant->id }}"><p class="notice">Preparing a lease for {{ $selectedTenant->name }}. Only this tenant’s eligible assignments are listed.</p>@endif

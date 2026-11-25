@@ -1,6 +1,8 @@
 @extends('layouts.app')
 @section('title','Transfer or renew assignment')
-@section('subtitle','The current assignment ends when the new agreement begins. The new term uses the approved category rate and market policy.')
+@section('subtitle',config('billing.fixed_day_enabled')
+    ? 'The current assignment ends before the new agreement begins. Choose the billing interval for the new term.'
+    : 'The current assignment ends when the new agreement begins. The new term uses the approved category rate and market policy.')
 @section('content')
 <form method="post" action="{{ route('assignments.transfer',$assignment) }}" class="panel max-w-2xl" data-confirm="Save transfer or renewal?">
     @csrf
@@ -24,10 +26,16 @@
             </option>
         @endforeach
     </select>
-    <label for="start">New start date (first day of a month)</label>
-    <input id="start" type="date" name="start_date" value="{{ old('start_date',today()->startOfMonth()->toDateString()) }}" required>
+    <label for="start">New start date{{ $originalInterval ? '' : ' (first day of a month)' }}</label>
+    <input id="start" type="date" name="start_date" value="{{ old('start_date',$originalInterval ? '' : today()->startOfMonth()->toDateString()) }}" max="{{ today()->toDateString() }}" required
+        @include('components.field-error-attributes', ['field'=>'start_date','id'=>'start','hint'=>$originalInterval ? 'transfer-start-hint' : null])>
+    @if($originalInterval)
+        <p class="text-sm text-slate-600 mt-1" id="transfer-start-hint">Use a {{ $originalInterval }}-day interval boundary after the original start on {{ $assignment->start_date }}.@unless(config('billing.fixed_day_enabled')) The new monthly term must also start on the first day of a month.@endunless</p>
+    @endif
+    @include('components.field-error', ['field'=>'start_date','id'=>'start'])
     <label for="end">New end date (optional)</label>
     <input id="end" type="date" name="end_date" value="{{ old('end_date') }}">
+    @include('assignments.billing-terms')
     <label for="reference">New agreement reference</label>
     <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" required>
     <label for="reason">Transfer or renewal reason</label>

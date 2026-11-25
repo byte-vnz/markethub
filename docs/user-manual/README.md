@@ -1,6 +1,6 @@
 # User documentation package
 
-Version 1.3, prepared 20 November 2026 for LGU review. This revision explains how to use keyboard navigation, recover from validation errors, scroll wide tables and verify contract actions. The package also documents unified registration, rate and policy approvals, assessed rentals, Market Sections and assignment rental overrides. All captures use fictional demonstration records. LGU review is pending.
+Version 1.4, prepared 26 November 2026 for LGU review. This revision documents optional fixed-day assignments, separate rental bills and record-only CUSA. The package also covers unified registration, rate and policy approvals, monthly assessed rentals, Market Sections and assignment rental overrides. Captures use fictional demonstration records. LGU review is pending.
 
 ## Read and download
 - User Manual source: USER_MANUAL.md (14 chapters, 19-step lifecycle, 50 permission rows, 20 reports).

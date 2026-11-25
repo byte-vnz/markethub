@@ -1,0 +1,340 @@
+{
+  "browser": "Chrome/152.0.7977.83",
+  "screens": [
+    "payments/69-fixed-day-generation.png",
+    "payments/70-fixed-day-bill.png",
+    "stalls/67-fixed-day-assignment.png",
+    "tenants/68-fixed-day-preview.png"
+  ],
+  "checks": {
+    "assignment": {
+      "stall": "TRAIN-W1",
+      "interval": 7,
+      "dailyRent": "200.00",
+      "dailyCusa": "10.00",
+      "marketPolicy": "No policy in fixture"
+    },
+    "preview": {
+      "stall": "TRAIN-W2",
+      "interval": 9,
+      "period": "2026-11-03 – 2026-11-11",
+      "payable": "1800.00",
+      "recordedCusa": "90.00"
+    },
+    "keyboardModeAndCheckbox": true,
+    "nativeFixedDayGenerationWithScriptsBlocked": true,
+    "bills": {
+      "periods": [
+        "2026-11-01 – 2026-11-07",
+        "2026-11-08 – 2026-11-14"
+      ],
+      "perBillPayable": "1400.00",
+      "perBillRecordedCusa": "70.00",
+      "posted": "2026-11-01",
+      "draft": "2026-11-08"
+    },
+    "viewports": [
+      {
+        "page": "/assignments/create",
+        "heading": "Assign a tenant",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/assignments",
+        "heading": "Stall Assignments",
+        "viewport": 320,
+        "documentWidth": 320,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/create",
+        "heading": "Register tenant",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/1?tab=rental",
+        "heading": "Fictional Weekly Tenant",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/manage/stalls/1",
+        "heading": "TRAIN-W1",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/billing/create?billing_mode=fixed_days",
+        "heading": "Generate draft bills",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/billing?period=2026-11",
+        "heading": "Rental Billing",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/billing/1",
+        "heading": "W-20261101-1",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/payments/create?tenant_id=1",
+        "heading": "Record Rental Payment",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/reports/monthly-billing",
+        "heading": "Rental Billing",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflow": []
+      },
+      {
+        "page": "/assignments/create",
+        "heading": "Assign a tenant",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/assignments",
+        "heading": "Stall Assignments",
+        "viewport": 375,
+        "documentWidth": 375,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/create",
+        "heading": "Register tenant",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/1?tab=rental",
+        "heading": "Fictional Weekly Tenant",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/manage/stalls/1",
+        "heading": "TRAIN-W1",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/billing/create?billing_mode=fixed_days",
+        "heading": "Generate draft bills",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/billing?period=2026-11",
+        "heading": "Rental Billing",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/billing/1",
+        "heading": "W-20261101-1",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/payments/create?tenant_id=1",
+        "heading": "Record Rental Payment",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/reports/monthly-billing",
+        "heading": "Rental Billing",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflow": []
+      },
+      {
+        "page": "/assignments/create",
+        "heading": "Assign a tenant",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflow": []
+      },
+      {
+        "page": "/assignments",
+        "heading": "Stall Assignments",
+        "viewport": 768,
+        "documentWidth": 768,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/create",
+        "heading": "Register tenant",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/1?tab=rental",
+        "heading": "Fictional Weekly Tenant",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflow": []
+      },
+      {
+        "page": "/manage/stalls/1",
+        "heading": "TRAIN-W1",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflow": []
+      },
+      {
+        "page": "/billing/create?billing_mode=fixed_days",
+        "heading": "Generate draft bills",
+        "viewport": 768,
+        "documentWidth": 768,
+        "overflow": []
+      },
+      {
+        "page": "/billing?period=2026-11",
+        "heading": "Rental Billing",
+        "viewport": 768,
+        "documentWidth": 768,
+        "overflow": []
+      },
+      {
+        "page": "/billing/1",
+        "heading": "W-20261101-1",
+        "viewport": 768,
+        "documentWidth": 768,
+        "overflow": []
+      },
+      {
+        "page": "/payments/create?tenant_id=1",
+        "heading": "Record Rental Payment",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflow": []
+      },
+      {
+        "page": "/reports/monthly-billing",
+        "heading": "Rental Billing",
+        "viewport": 768,
+        "documentWidth": 768,
+        "overflow": []
+      },
+      {
+        "page": "/assignments/create",
+        "heading": "Assign a tenant",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflow": []
+      },
+      {
+        "page": "/assignments",
+        "heading": "Stall Assignments",
+        "viewport": 1440,
+        "documentWidth": 1440,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/create",
+        "heading": "Register tenant",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflow": []
+      },
+      {
+        "page": "/manage/tenants/1?tab=rental",
+        "heading": "Fictional Weekly Tenant",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflow": []
+      },
+      {
+        "page": "/manage/stalls/1",
+        "heading": "TRAIN-W1",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflow": []
+      },
+      {
+        "page": "/billing/create?billing_mode=fixed_days",
+        "heading": "Generate draft bills",
+        "viewport": 1440,
+        "documentWidth": 1440,
+        "overflow": []
+      },
+      {
+        "page": "/billing?period=2026-11",
+        "heading": "Rental Billing",
+        "viewport": 1440,
+        "documentWidth": 1440,
+        "overflow": []
+      },
+      {
+        "page": "/billing/1",
+        "heading": "W-20261101-1",
+        "viewport": 1440,
+        "documentWidth": 1440,
+        "overflow": []
+      },
+      {
+        "page": "/payments/create?tenant_id=1",
+        "heading": "Record Rental Payment",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflow": []
+      },
+      {
+        "page": "/reports/monthly-billing",
+        "heading": "Rental Billing",
+        "viewport": 1440,
+        "documentWidth": 1440,
+        "overflow": []
+      }
+    ],
+    "browserPrintPdfBytes": 55253,
+    "populatedPreviewViewports": [
+      {
+        "viewport": 320,
+        "documentWidth": 305
+      },
+      {
+        "viewport": 375,
+        "documentWidth": 360
+      },
+      {
+        "viewport": 768,
+        "documentWidth": 753
+      },
+      {
+        "viewport": 1440,
+        "documentWidth": 1425
+      }
+    ]
+  },
+  "errors": [],
+  "unexpectedResponses": []
+}

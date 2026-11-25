@@ -49,7 +49,8 @@ class Ledger
             ->all();
         $total = array_sum($counts);
         $bills = self::bills($market);
-        $range = (clone $bills)->whereBetween("period", [substr($from, 0, 7), substr($to, 0, 7)]);
+        $range = (clone $bills)->where('period', '>=', substr($from, 0, 7))
+            ->where('period', '<=', substr($to, 0, 7).'-31');
         $collections = DB::table("payment_allocations AS pa")
             ->join("payments AS p", "p.id", "=", "pa.payment_id")
             ->join("rental_bills AS b", "b.id", "=", "pa.rental_bill_id")

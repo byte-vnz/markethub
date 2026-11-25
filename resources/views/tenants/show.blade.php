@@ -10,8 +10,10 @@
 @if(session('duplicate_warning'))<p class="notice" role="status">{{ session('duplicate_warning') }}</p>@endif
 @if(session('rental_mode_notice'))<p class="notice" role="status">{{ session('rental_mode_notice') }}</p>@endif
 @if(session('registered_rental_link') && isset($tabs['rental']))
-    <p class="notice" role="status">The assignment starts with automatic rent.
-        <a class="underline font-semibold" href="{{ route('records.show',['tenants',$record->id,'tab'=>'rental']) }}">Open Rental Information</a> to review the basis or request an override.
+    <p class="notice" role="status">
+        {{ session('registered_rental_link') === 'fixed_days' ? 'The assessment uses the saved billing interval.' : 'The assignment starts with automatic rent.' }}
+        <a class="underline font-semibold" href="{{ route('records.show',['tenants',$record->id,'tab'=>'rental']) }}">Open Rental Information</a>
+        {{ session('registered_rental_link') === 'fixed_days' ? 'to review the basis.' : 'to review the basis or request an override.' }}
     </p>
 @endif
 <nav class="flex flex-wrap gap-x-4 gap-y-1 border-b border-slate-200 mb-5" aria-label="Tenant profile sections">
@@ -114,7 +116,13 @@
                     @can('stalls.view')<a class="text-sm text-blue-800 underline" href="{{ route('records.show',['stalls',$assignment->stall_id]) }}">View stall</a>@endcan
                     @if($assignment->status==='active')
                         @can('assignments.manage')<a class="text-sm text-blue-800 underline" href="{{ route('assignments.transfer-form',$assignment) }}">Transfer or renew</a>@endcan
-                        @can('contracts.create')<a class="text-sm text-blue-800 underline" href="{{ route('contracts.create',['assignment_id'=>$assignment->id]) }}">Prepare lease contract</a>@endcan
+                        @can('contracts.create')
+                            @if(optional(optional($assignment->agreement)->assessment)->isFixedDays())
+                                <span class="text-sm text-slate-600">The monthly lease template is unavailable for this fixed-day agreement.</span>
+                            @else
+                                <a class="text-sm text-blue-800 underline" href="{{ route('contracts.create',['assignment_id'=>$assignment->id]) }}">Prepare lease contract</a>
+                            @endif
+                        @endcan
                     @endif
                 </div>
             </article>
@@ -142,6 +150,7 @@
         @forelse($profileAssignments as $assignment)
             @php($agreement = $assignment->agreement)
             @php($assessment = optional($agreement)->assessment)
+            @php($fixedDays = optional($assessment)->isFixedDays())
             <article class="mt-5 border-t border-slate-200 pt-4">
                 <h3>{{ $assessment ? $assessment->stall_code : $assignment->stall->code }} · {{ optional($agreement)->reference ?: 'No agreement' }}</h3>
                 <p class="text-sm text-slate-600 mt-2">{{ optional($assignment->business)->name ?? 'Business unavailable' }} · {{ optional($assignment->stall->section)->name ?? 'Unknown section' }}@if(optional($assignment->stall->section)->status === 'inactive') (Inactive)@endif</p>
@@ -149,7 +158,9 @@
                 @if($frozenSection !== null && $frozenSection !== optional($assignment->stall->section)->name)
                     <p class="text-sm text-slate-600 mt-1">Assessed section {{ $frozenSection }}</p>
                 @endif
-                @can('rentals.override.view')
+                @if($fixedDays)
+                    <p class="text-sm text-slate-600 mt-3">This agreement bills every {{ $assessment->billing_days }} {{ Illuminate\Support\Str::plural('day', $assessment->billing_days) }}. Monthly rental overrides are unavailable.</p>
+                @elseif(auth()->user()->can('rentals.override.view'))
                     @php([$quote, $quoteError] = $rentalQuotes[$assignment->id])
                     <h4 class="mt-4 font-medium">Applicable rental preview · {{ $period }}</h4>
                     @include('rental-overrides.quote')
@@ -173,20 +184,27 @@
                     @if($assignment->pending_override_count)
                         <p class="text-sm text-slate-600 mt-2">{{ $assignment->pending_override_count }} {{ Illuminate\Support\Str::plural('pending request',$assignment->pending_override_count) }} awaiting review.</p>
                     @endif
-                @endcan
+                @endif
                 @if($assessment)
-                    <details class="mt-4" @if(empty($quote)) open @endif>
-                    <summary class="cursor-pointer font-medium text-sm">Initial assessment · {{ $assessment->period }}</summary>
+                    <details class="mt-4" @if($fixedDays || empty($rentalQuotes[$assignment->id][0])) open @endif>
+                    <summary class="cursor-pointer font-medium text-sm">Initial assessment · {{ $assessment->periodLabel() }}</summary>
                     <p class="text-sm text-slate-600 mt-2">{{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }}</p>
                     <dl class="mt-2">
                         <div class="detailrow"><dt>Assessed floor area</dt><dd>{{ $assessment->floor_area }} sq. m.</dd></div>
                         <div class="detailrow"><dt>Minimum / maximum per sq. m.</dt><dd>PHP {{ $assessment->minimum_rate }} / {{ $assessment->maximum_rate }}</dd></div>
                         <div class="detailrow"><dt>Applied rental rate per sq. m.</dt><dd>PHP {{ $assessment->rental_rate_sqm }}</dd></div>
-                        <div class="detailrow"><dt>Daily rent / CUSA</dt><dd>PHP {{ $assessment->daily_rental }} / {{ $assessment->daily_cusa }}</dd></div>
                         <div class="detailrow"><dt>Billing days</dt><dd>{{ $assessment->billing_days }}</dd></div>
-                        <div class="detailrow"><dt>Monthly rent / CUSA</dt><dd>PHP {{ $assessment->monthly_rental }} / {{ $assessment->monthly_cusa }}</dd></div>
-                        <div class="detailrow"><dt>Monthly total for reference month</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}</dd></div>
-                        <div class="detailrow"><dt>Two months’ advance / security deposit</dt><dd>PHP {{ $assessment->advance_rental }} / {{ $assessment->security_deposit }}</dd></div>
+                        @if($fixedDays)
+                            <div class="detailrow"><dt>Daily rent</dt><dd>PHP {{ $assessment->daily_rental }}</dd></div>
+                            <div class="detailrow"><dt>Period rent payable</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}</dd></div>
+                            <div class="detailrow"><dt>Daily CUSA for records only</dt><dd>PHP {{ $assessment->daily_cusa }}</dd></div>
+                            <div class="detailrow"><dt>CUSA for the period (records only)</dt><dd>PHP {{ $assessment->monthly_cusa }}</dd></div>
+                        @else
+                            <div class="detailrow"><dt>Daily rent / CUSA</dt><dd>PHP {{ $assessment->daily_rental }} / {{ $assessment->daily_cusa }}</dd></div>
+                            <div class="detailrow"><dt>Monthly rent / CUSA</dt><dd>PHP {{ $assessment->monthly_rental }} / {{ $assessment->monthly_cusa }}</dd></div>
+                            <div class="detailrow"><dt>Monthly total for reference month</dt><dd>PHP {{ $assessment->total_monthly_rental_cusa }}</dd></div>
+                            <div class="detailrow"><dt>Two months’ advance / security deposit</dt><dd>PHP {{ $assessment->advance_rental }} / {{ $assessment->security_deposit }}</dd></div>
+                        @endif
                     </dl>
                     </details>
                 @elseif($agreement)

@@ -1,6 +1,8 @@
 @extends('layouts.app')
 @section('title','Assign a tenant')
-@section('subtitle','The agreement uses the approved business category rate, stall location and market rental policy.')
+@section('subtitle',config('billing.fixed_day_enabled')
+    ? 'The agreement uses the approved category rate, stall location and selected billing interval.'
+    : 'The agreement uses the approved business category rate, stall location and market rental policy.')
 @section('content')
 <form method="post" action="{{ route('assignments.store') }}" class="panel max-w-3xl">
     @csrf
@@ -41,12 +43,13 @@
         </div>
         <div>
             <label for="start">Start date</label>
-            <input id="start" type="date" name="start_date" value="{{ old('start_date',today()->startOfMonth()->toDateString()) }}" required>
+            <input id="start" type="date" name="start_date" value="{{ old('start_date',config('billing.fixed_day_enabled') ? today()->toDateString() : today()->startOfMonth()->toDateString()) }}" required>
         </div>
         <div>
             <label for="end">End date (optional)</label>
             <input id="end" type="date" name="end_date" value="{{ old('end_date') }}">
         </div>
+        @include('assignments.billing-terms')
         <div>
             <label for="reference">Agreement reference</label>
             <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" required>

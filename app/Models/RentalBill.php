@@ -5,6 +5,12 @@ class RentalBill extends Model
 {
     protected $guarded = ["id"];
     protected $casts = ["amount" => "decimal:2"];
+
+    public function periodLabel(): string
+    {
+        return $this->coverage_start && $this->coverage_end
+            ? $this->coverage_start.' – '.$this->coverage_end : $this->period;
+    }
     public function assessment()
     {
         return $this->belongsTo(RentalAssessment::class, "rental_assessment_id");

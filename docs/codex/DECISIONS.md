@@ -60,3 +60,9 @@ The user approved the modernization design. Keep a visible server-rendered mobil
 ## PHP 7.4 production parse error — 2026-11-24
 
 The production screenshot identified PHP 8-only parenthesized dynamic class construction in RecordController. Replaced all three application occurrences in RecordController (create/save) and RecordRequest (relation validation) with class-name variables. The existing parser's version target is best-effort; scripts/check-php74.php now explicitly rejects this syntax and no longer labels its result as a strict grammar check. See docs/operations/PHP74_PARSE_ERROR.md for operator commands and debug-display precautions. No data/schema/permission/UI workflow change; manuals and exports do not require rebuilding for this syntax-only correction. Native PHP 7.4 and production verification remain operator tasks.
+
+## Adjustable fixed-day billing — 2026-11-25
+
+Default-disable fixed-day assignment creation until an authorized forward migration and rollout. Freeze the chosen interval on new assessments and use aligned date keys and inclusive coverage for independently billable periods. Preserve existing monthly keys and snapshots. A nullable market-policy association supports the ordinary fixed-day path with an approved category rate. The concurrent-occupancy gate still checks effective policies and retains the new assignment market's authorizing policy in the assessment. Record daily and period CUSA without charging it on fixed-day bills.
+
+Retain existing generation, posting, backdate and ledger permissions. Require full fixed-day intervals and protect saved coverage during assignment ending or renewal. Monthly contract and rental override workflows require separately approved fixed-day compatibility. Changes to the feature switch govern new terms. Previously saved fixed-day terms keep their billing and history behavior. See [approved design](../superpowers/specs/2026-11-25-fixed-day-billing-design.md).

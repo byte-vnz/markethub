@@ -63,7 +63,7 @@
                         <td>
                             @foreach($record->assignments->take(3) as $assignment)
                                 @php($agreement = $assignment->agreement)
-                                @if($agreement)<div>{{ $assignment->stall->code }} · PHP {{ $agreement->monthly_amount }} <span class="text-xs text-slate-600">{{ $agreement->assessment ? 'Initial assessment · '.$agreement->assessment->period : 'Legacy agreement' }}</span></div>@endif
+                                @if($agreement)<div>{{ $assignment->stall->code }} · PHP {{ $agreement->monthly_amount }} <span class="text-xs text-slate-600">{{ $agreement->assessment ? 'Initial assessment · '.$agreement->assessment->periodLabel() : 'Legacy agreement' }}</span></div>@endif
                             @endforeach
                             <div class="text-xs mt-1 {{ bccomp((string)$record->overdue_balance,'0',2)>0 ? 'text-red-800' : 'text-slate-600' }}">
                                 @if(!$record->posted_bill_count) Unbilled

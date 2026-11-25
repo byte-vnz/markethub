@@ -9,18 +9,19 @@ class BillingService
     public function generate(User $actor, StallAssignment $assignment, $period, $due)
     {
         $this->authorize($actor, "billing.generate");
+        $fixed = (bool) optional(optional($assignment->agreement()->first())->assessment)->isFixedDays();
         Validator::make(
             ["period" => $period, "due_date" => $due],
-            ["period" => "required|date_format:Y-m", "due_date" => "required|date_format:Y-m-d"],
+            ["period" => 'required|date_format:'.($fixed ? 'Y-m-d' : 'Y-m'), "due_date" => "required|date_format:Y-m-d"],
         )->validate();
-        $start = Carbon::createFromFormat("Y-m-d", $period . "-01")->startOfDay();
+        $start = Carbon::createFromFormat("Y-m-d", $fixed ? $period : $period . "-01")->startOfDay();
         $end = $start->copy()->endOfMonth()->toDateString();
-        $this->check($period <= today()->format("Y-m"), "Future billing is not enabled.");
-        if ($period < today()->format("Y-m")) {
+        $this->check($period <= today()->format($fixed ? 'Y-m-d' : 'Y-m'), "Future billing is not enabled.");
+        if ($period < today()->format($fixed ? 'Y-m-d' : 'Y-m')) {
             $this->authorize($actor, "financial.backdate");
         }
-        $this->check($due >= $period . "-01", "Due date cannot precede billing period.");
-        return DB::transaction(function () use ($actor, $assignment, $period, $due, $end) {
+        $this->check($due >= $start->toDateString(), "Due date cannot precede billing period.");
+        return DB::transaction(function () use ($actor, $assignment, $period, $due, $end, $fixed) {
             Tenant::whereKey($assignment->tenant_id)->lockForUpdate()->firstOrFail();
             $a = StallAssignment::whereKey($assignment->id)->lockForUpdate()->firstOrFail();
             $existing = RentalBill::where("stall_assignment_id", $a->id)
@@ -30,17 +31,28 @@ class BillingService
             if ($existing) {
                 return $existing;
             }
-            $this->check(
-                $a->start_date <= $period . "-01" && (!$a->end_date || $a->end_date >= $end),
-                "Full-month agreement required. Partial-month billing awaits approved proration policy.",
-            );
+            if ($fixed) {
+                $range = app(RentalCalculationService::class)->fixedPeriod($a, $period);
+                $end = $range['end'];
+                $overlap = $a->bills()->where(function ($query) use ($period, $end) {
+                    $query->where(function ($query) use ($period, $end) {
+                        $query->where('coverage_start', '<=', $end)->where('coverage_end', '>=', $period);
+                    })->orWhere(function ($query) use ($period, $end) {
+                        $query->whereNull('coverage_start')->whereBetween('period', [substr($period, 0, 7), substr($end, 0, 7)]);
+                    });
+                })->lockForUpdate()->exists();
+                $this->check(!$overlap, 'A saved bill already covers part of this interval.');
+            } else {
+                $this->check($a->start_date <= $period . "-01" && (!$a->end_date || $a->end_date >= $end),
+                    "Full-month agreement required. Partial-month billing awaits approved proration policy.");
+            }
             $agreement = $a->agreement()->lockForUpdate()->first();
             $this->check((bool) $agreement, "A rental agreement is required.");
             $assessment = $agreement->rental_assessment_id
                 ? app(RentalCalculationService::class)->assess($actor, $a, $period, "billing")
                 : null;
             $bill = RentalBill::create([
-                "reference" => "B-" . str_replace("-", "", $period) . "-" . $a->id,
+                "reference" => ($fixed ? 'W-' : 'B-') . str_replace("-", "", $period) . "-" . $a->id,
                 "stall_assignment_id" => $a->id,
                 "tenant_id" => $a->tenant_id,
                 "stall_id" => $a->stall_id,
@@ -50,12 +62,15 @@ class BillingService
                 "amount" => $assessment ? $assessment->total_monthly_rental_cusa : Money::positive($agreement->monthly_amount),
                 "status" => "draft",
                 "created_by" => $actor->id,
-            ]);
+            ] + ($fixed ? ['coverage_start'=>$period, 'coverage_end'=>$end] : []));
             if ($assessment) {
-                $bill->items()->createMany([
+                $items = [
                     ["description" => "Base rent / " . $agreement->reference, "amount" => $assessment->monthly_rental],
-                    ["description" => "CUSA / " . $agreement->reference, "amount" => $assessment->monthly_cusa],
-                ]);
+                ];
+                if (!$assessment->isFixedDays()) {
+                    $items[] = ["description" => "CUSA / " . $agreement->reference, "amount" => $assessment->monthly_cusa];
+                }
+                $bill->items()->createMany($items);
             } else {
                 $bill->items()->create([
                     "description" => "Monthly rent / " . $agreement->reference,
@@ -76,14 +91,14 @@ class BillingService
                 return $b;
             }
             $this->check($b->status === "draft", "Only drafts can be posted.");
-            $a = $b->assignment;
+            $a = StallAssignment::whereKey($b->stall_assignment_id)->lockForUpdate()->firstOrFail();
             $this->check(
-                $a->start_date <= $b->period . "-01" &&
+                $a->start_date <= ($b->coverage_start ?: $b->period . "-01") &&
                     (!$a->end_date ||
                         $a->end_date >=
-                            Carbon::parse($b->period . "-01")
+                            ($b->coverage_end ?: Carbon::parse($b->period . "-01")
                                 ->endOfMonth()
-                                ->toDateString()),
+                                ->toDateString())),
                 "Assignment dates changed; this bill cannot be posted.",
             );
             $b->update(["status" => "posted", "posted_by" => $actor->id, "posted_at" => now()]);

@@ -1,5 +1,9 @@
 # Documentation revisions
 
+## Version 1.4 — 2026-11-26
+
+Added optional fixed-day assignment, renewal, period calculation and bill generation instructions. Documented record-only CUSA and the continued monthly policy, lease and override requirements. Included an illustrative fixed-day exercise and updated the affected workflow diagrams.
+
 ## Version 1.3 — 2026-11-20
 
 Updated the manual, quick reference and workflows for narrow-screen navigation, wide table keyboard scrolling, linked validation errors and contract action dialogs. Refreshed fictional screenshots and rebuilt the print and editable exports.

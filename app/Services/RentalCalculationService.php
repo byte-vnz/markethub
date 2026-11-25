@@ -19,7 +19,7 @@ class RentalCalculationService
         "equivalent_rate_per_sqm", "contract_rate_consistent",
     ];
 
-    public function resolve(Business $business, Stall $stall, $date, $period): array
+    public function resolve(Business $business, Stall $stall, $date, $period, array $terms = []): array
     {
         Validator::make(["effective_from" => $date], ["effective_from" => "required|date_format:Y-m-d"])->validate();
         $this->check($business->status === "active" && optional($business->tenant)->status === "active",
@@ -46,7 +46,14 @@ class RentalCalculationService
             "category_rate",
             "Choose a category with exactly one approved rate effective on the agreement start.",
         );
-        $policy = $this->marketPolicy($market->id, $date);
+        $fixed = (bool) config('billing.fixed_day_enabled', false);
+        // Only AssignmentService supplies this already-validated concurrency authority.
+        $policy = $fixed ? ($terms['concurrency_policy'] ?? null) : $this->marketPolicy($market->id, $date);
+        if ($fixed) {
+            $terms = Validator::make([
+                'billing_interval_days' => $terms['billing_interval_days'] ?? config('billing.default_interval_days', 7),
+            ], ['billing_interval_days' => 'required|integer|between:1,366'])->validate() + $terms;
+        }
         $min = $this->decimal($rate->minimum_rate, "minimum_rate", "999999999999.99", true);
         $max = $this->decimal($rate->maximum_rate, "maximum_rate", "999999999999.99", true);
         $this->check(bccomp($min, $max, 2) <= 0, "category_rate", "The approved rate range is invalid.");
@@ -55,7 +62,7 @@ class RentalCalculationService
             "business_id" => $business->id,
             "business_category_id" => $category->id,
             "business_category_rental_rate_id" => $rate->id,
-            "rental_policy_id" => $policy->id,
+            "rental_policy_id" => optional($policy)->id,
             "market_id" => $market->id,
             "market_name" => $market->name,
             "stall_code" => $stall->code,
@@ -63,26 +70,31 @@ class RentalCalculationService
             "location_type" => $stall->location_type,
             "minimum_rate" => $min,
             "maximum_rate" => $max,
-            "billing_day_rule" => $policy->billing_day_rule,
-            "fixed_billing_days" => $policy->fixed_billing_days,
-            "max_concurrent_assignments" => $policy->max_concurrent_assignments,
-            "advance_deposit_authorized" => $policy->advance_deposit_authorized,
+            "billing_day_rule" => $fixed ? 'fixed' : $policy->billing_day_rule,
+            "fixed_billing_days" => $fixed ? (int) $terms['billing_interval_days'] : $policy->fixed_billing_days,
+            "max_concurrent_assignments" => optional($policy)->max_concurrent_assignments,
+            "advance_deposit_authorized" => $fixed ? false : $policy->advance_deposit_authorized,
             "rate_reference" => $rate->reference_document,
             "rate_effective_from" => $rate->effective_from->toDateString(),
             "rate_effective_until" => optional($rate->effective_until)->toDateString(),
-            "policy_reference" => $policy->reference_document,
-            "policy_effective_from" => $policy->effective_from->toDateString(),
-            "policy_effective_until" => optional($policy->effective_until)->toDateString(),
+            "policy_reference" => optional($policy)->reference_document,
+            "policy_effective_from" => $policy ? $policy->effective_from->toDateString() : null,
+            "policy_effective_until" => $policy ? optional($policy->effective_until)->toDateString() : null,
             "stall_section_name" => $stall->section->name,
             "market_section_id" => $stall->market_section_id,
             "market_section_name" => $stall->section->name,
             "stall_category_name" => optional($stall->category)->name ?? $stall->classification,
         ];
+        if ($fixed) {
+            $basis['billing_cycle'] = 'fixed_days';
+            $basis['cusa_chargeable'] = false;
+        }
         $automatic = $this->calculate(
             (string) $stall->area,
             $ratePerSqm,
-            $policy->daily_cusa,
-            $this->billingDays($basis, $period),
+            $fixed ? ($terms['daily_cusa'] ?? '0.00') : $policy->daily_cusa,
+            $fixed ? $basis['fixed_billing_days'] : $this->billingDays($basis, $period),
+            $fixed,
         );
         return $basis + $automatic + [
             'computation_mode' => 'automatic', 'automatic_rate_per_sqm' => $ratePerSqm,
@@ -138,22 +150,30 @@ class RentalCalculationService
 
     public function fromAssessment(RentalAssessment $assessment, $period): array
     {
-        return $this->compose(
+        $amounts = $this->compose(
             $assessment->floor_area,
             $assessment->rental_rate_sqm,
             $assessment->daily_cusa,
-            $this->billingDays($assessment->basis, $period),
+            $assessment->isFixedDays() ? (int) $assessment->basis['fixed_billing_days'] : $this->billingDays($assessment->basis, $period),
             $assessment->daily_rental,
+            $assessment->isFixedDays(),
         );
+        return $amounts;
     }
 
     public function forAssignment(StallAssignment $assignment, string $period): array
     {
         $assignment = StallAssignment::findOrFail($assignment->id);
-        $this->guardReferenceMonth($assignment, $period);
         $initial = optional($assignment->agreement()->first())->assessment;
         $this->check($initial && $initial->purpose === 'initial' && (int) $initial->stall_assignment_id === (int) $assignment->id,
             'assessment', 'Renew this assignment to use an approved category assessment.');
+        if ($initial->isFixedDays()) {
+            $this->fixedPeriod($assignment, $period);
+            return $this->fromAssessment($initial, $period) + [
+                'computation_mode'=>'automatic', 'rental_override_id'=>null, 'override'=>null,
+            ] + $initial->only(self::ASSESSMENT_COLUMNS) + $initial->basis;
+        }
+        $this->guardReferenceMonth($assignment, $period);
         $automatic = $this->fromAssessment($initial, $period);
         $day = $period.'-01';
         $query = RentalOverride::where('stall_assignment_id', $assignment->id)->covering($day, $day);
@@ -182,6 +202,21 @@ class RentalCalculationService
         return $data;
     }
 
+    public function fixedPeriod(StallAssignment $assignment, string $period): array
+    {
+        Validator::make(['period'=>$period], ['period'=>'required|date_format:Y-m-d'])->validate();
+        $initial = optional($assignment->agreement()->first())->assessment;
+        $this->check($initial && $initial->isFixedDays(), 'period', 'Choose a billing month for this monthly agreement.');
+        $days = (int) $initial->basis['fixed_billing_days'];
+        $offset = Carbon::parse($assignment->start_date)->diffInDays(Carbon::parse($period), false);
+        $this->check($days >= 1 && $days <= 366 && $offset >= 0 && $offset % $days === 0,
+            'period', 'Choose a fixed-day interval starting on the agreement date or an exact interval after it.');
+        $end = Carbon::parse($period)->addDays($days - 1)->toDateString();
+        $this->check(!$assignment->end_date || $end <= $assignment->end_date,
+            'period', 'The complete fixed-day interval must fit within the assignment term. Partial intervals are not enabled.');
+        return ['start'=>$period, 'end'=>$end, 'days'=>$days];
+    }
+
     public function guardReferenceMonth(StallAssignment $assignment, string $period): void
     {
         Validator::make(['period' => $period], ['period' => 'required|date_format:Y-m'])->validate();
@@ -191,6 +226,7 @@ class RentalCalculationService
 
     public function proposedAmounts(RentalAssessment $initial, string $period, string $type, $rate, $direct): array
     {
+        $this->check(!$initial->isFixedDays(), 'assessment', 'Monthly rental overrides are unavailable for fixed-day agreements.');
         $days = $this->billingDays($initial->basis, $period);
         $area = $initial->floor_area;
         $this->check(in_array($type, ['daily_amount', 'rate_per_sqm'], true), 'override_type', 'Choose an override method.');
@@ -211,18 +247,21 @@ class RentalCalculationService
         ];
     }
 
-    public function assess(User $actor, StallAssignment $assignment, $period, $purpose = "initial"): RentalAssessment
+    public function assess(User $actor, StallAssignment $assignment, $period, $purpose = "initial", array $terms = []): RentalAssessment
     {
+        $fixed = $purpose === 'initial' ? (bool) config('billing.fixed_day_enabled', false)
+            : (bool) optional(optional($assignment->agreement()->first())->assessment)->isFixedDays();
         $permissions = ["initial" => "assignments.manage", "billing" => "billing.generate", "contract" => "contracts.create"];
         Validator::make(["purpose" => $purpose, "period" => $period], [
-            "purpose" => "required|in:initial,billing,contract", "period" => "required|date_format:Y-m",
+            "purpose" => "required|in:initial,billing,contract", "period" => 'required|date_format:'.($fixed ? 'Y-m-d' : 'Y-m'),
         ])->validate();
         if (!$actor->active || !$actor->can($permissions[$purpose]) ||
-            ($purpose === "billing" && $period < today()->format("Y-m") && !$actor->can("financial.backdate"))) {
+            ($purpose === "billing" && $period < today()->format($fixed ? 'Y-m-d' : 'Y-m') && !$actor->can("financial.backdate"))) {
             throw new \Illuminate\Auth\Access\AuthorizationException();
         }
 
-        return DB::transaction(function () use ($actor, $assignment, $period, $purpose) {
+        $this->check(!$fixed || $purpose !== 'contract', 'contract', 'The monthly contract template cannot be used for fixed-day agreements.');
+        return DB::transaction(function () use ($actor, $assignment, $period, $purpose, $terms, $fixed) {
             $tenant = Tenant::whereKey($assignment->tenant_id)->lockForUpdate()->firstOrFail();
             $stall = $purpose === "initial"
                 ? Stall::whereKey($assignment->stall_id)->lockForUpdate()->firstOrFail()
@@ -234,17 +273,18 @@ class RentalCalculationService
                 return $existing;
             }
 
-            $first = $period . "-01";
-            $last = Carbon::parse($first)->endOfMonth()->toDateString();
+            $first = $fixed ? $period : $period . "-01";
+            $last = $fixed && $purpose !== 'initial' ? $this->fixedPeriod($assignment, $period)['end']
+                : Carbon::parse($first)->endOfMonth()->toDateString();
             $agreement = $assignment->agreement()->lockForUpdate()->first();
             if ($purpose === "initial") {
-                $this->check(!$agreement && $assignment->status === "active" && substr($assignment->start_date, 0, 7) === $period,
+                $this->check(!$agreement && $assignment->status === "active" && ($fixed ? $assignment->start_date : substr($assignment->start_date, 0, 7)) === $period,
                     "assessment", "An initial assessment requires a new active assignment in its commencement month.");
                 $business = $assignment->business()->lockForUpdate()->first();
                 $this->check($business && (int) $business->tenant_id === (int) $tenant->id,
                     "business_id", "Select an active business belonging to the tenant.");
                 $business->setRelation("tenant", $tenant);
-                $resolved = $this->resolve($business, $stall, $assignment->start_date, $period);
+                $resolved = $this->resolve($business, $stall, $assignment->start_date, $period, $terms);
                 $values = Arr::only($resolved, self::ASSESSMENT_COLUMNS);
                 $values["effective_from"] = $assignment->start_date;
                 $values["effective_until"] = $assignment->end_date;
@@ -263,7 +303,7 @@ class RentalCalculationService
                 $this->check($assignment->start_date <= $last && (!$assignment->end_date || $assignment->end_date >= $first),
                     "period", "The reference month must overlap the assignment term.");
                 if ($purpose === "billing") {
-                    $this->check($period <= today()->format("Y-m") && $assignment->start_date <= $first &&
+                    $this->check($period <= today()->format($fixed ? 'Y-m-d' : 'Y-m') && $assignment->start_date <= $first &&
                         (!$assignment->end_date || $assignment->end_date >= $last),
                         "period", "An assessment for a bill requires an eligible full month.");
                 }
@@ -302,7 +342,7 @@ class RentalCalculationService
             'market_name', 'stall_code', 'business_category_name', 'market_section_id', 'market_section_name',
         ]) + Arr::only($data, ['billing_day_rule', 'fixed_billing_days', 'advance_deposit_authorized',
             'policy_reference', 'rate_reference', 'policy_effective_from', 'policy_effective_until',
-            'rate_effective_from', 'rate_effective_until']);
+            'rate_effective_from', 'rate_effective_until', 'billing_cycle', 'cusa_chargeable']);
         $basis['approval_fingerprint'] = $data['override']['approval_fingerprint'] ?? null;
         ksort($basis);
         return $basis;
@@ -315,7 +355,7 @@ class RentalCalculationService
         }
     }
 
-    public function calculate($area, $ratePerSqm, $dailyCusa, $billingDays)
+    public function calculate($area, $ratePerSqm, $dailyCusa, $billingDays, bool $fixedDays = false)
     {
         $area = $this->decimal($area, "floor_area", "99999999.99", true);
         $ratePerSqm = $this->decimal($ratePerSqm, "rental_rate_sqm", "999999999999.99", true);
@@ -327,7 +367,7 @@ class RentalCalculationService
         }
 
         // Round the displayed daily rent once, so each monthly line reconciles to daily rent times days.
-        return $this->compose($area, $ratePerSqm, $dailyCusa, $billingDays, $this->roundedProduct($area, $ratePerSqm));
+        return $this->compose($area, $ratePerSqm, $dailyCusa, $billingDays, $this->roundedProduct($area, $ratePerSqm), $fixedDays);
     }
 
     private function roundedProduct($area, $rate): string
@@ -335,19 +375,20 @@ class RentalCalculationService
         return bcadd(bcmul($area, $rate, 4), '0.005', 2);
     }
 
-    private function compose($area, $ratePerSqm, $dailyCusa, $billingDays, $dailyRental): array
+    private function compose($area, $ratePerSqm, $dailyCusa, $billingDays, $dailyRental, bool $fixedDays = false): array
     {
         $monthlyRental = bcmul($dailyRental, (string) $billingDays, 2);
         $monthlyCusa = bcmul($dailyCusa, (string) $billingDays, 2);
-        $advanceRental = bcmul($monthlyRental, "2", 2);
+        // Monthly advance/deposit terms do not establish charges for a fixed-day agreement.
+        $advanceRental = $fixedDays ? '0.00' : bcmul($monthlyRental, "2", 2);
         $amounts = [
             "daily_rental" => $dailyRental,
             "monthly_rental" => $monthlyRental,
             "monthly_cusa" => $monthlyCusa,
-            "total_monthly_rental_cusa" => bcadd($monthlyRental, $monthlyCusa, 2),
+            "total_monthly_rental_cusa" => $fixedDays ? $monthlyRental : bcadd($monthlyRental, $monthlyCusa, 2),
             "advance_rental" => $advanceRental,
-            "security_deposit" => $monthlyRental,
-            "total_initial_payment" => bcadd($advanceRental, $monthlyRental, 2),
+            "security_deposit" => $fixedDays ? '0.00' : $monthlyRental,
+            "total_initial_payment" => $fixedDays ? '0.00' : bcadd($advanceRental, $monthlyRental, 2),
         ];
         foreach ($amounts as $field => $amount) {
             if (bccomp($amount, "999999999999.99", 2) > 0) {

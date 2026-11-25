@@ -27,3 +27,17 @@ Rebuilt the complete 94-page PDF, six-page quick guide and editable DOCX with th
 
 The DOCX rendering attempt could not find LibreOffice `soffice.exe`. An additional Windows temporary-folder cleanup error followed. Word visual review and official LGU review remain open. Neither the exported manual layout nor the fictional contract download checks establish legal document fidelity or issuance approval. See `../frontend/RESPONSIVE_TEST_RESULTS.md` for the fictional browser checks.
 
+## Fixed-day billing v1.4
+
+The final application suite passed 277 tests and 2,230 assertions on PHP 8.2.12 with forced in-memory SQLite. It covered existing monthly behavior and the fixed-day migration, terms, generation, posting, report coverage, and authorization. The PHP 7.4 compatibility checker is a best-effort source check. Native PHP 7.4, MySQL migration and locking acceptance, and operator rollout remain pending.
+
+Chrome 152 used a guarded localhost preview with fictional data. The browser saved a seven-day assignment without a market policy and previewed nine-day rent of PHP 1,800.00 with PHP 90.00 for CUSA records. It exercised keyboard mode and assignment selection, standard fixed-day draft generation with scripts blocked, and two eligible periods in one month. The first period was explicitly posted at PHP 1,400.00 with PHP 70.00 recorded CUSA. The second stayed in draft. The browser recorded 40 page and viewport checks and four populated preview viewport checks, with zero page overflow, console errors or unexpected HTTP responses.
+
+Four reviewed captures appear as Figures 67–70. The single-page Chrome print capture shows the posted interval's inclusive dates and separate billed, outstanding and record-only CUSA columns. The final source cross-check found 14 chapters, 50 permission rows across six roles, 20 reports, 69 application screenshots and 12 diagrams, with zero errors. See [browser evidence](verification/fixed-day-browser-evidence.json) and [source cross-check](verification/source-cross-check.json).
+
+The builder self-check passed. The 26 November v1.4 exports contain a 96-page PDF manual and a six-page quick reference. Both have zero PDF print-bound issues. All contact sheets and representative expanded pages were reviewed. The editable DOCX passed ZIP/XML checks, and all 14 contents links resolve to their chapter bookmarks. Its footer page field is present. The source archive passed its 115-entry checksum and byte comparison.
+
+The separate in-memory Help check passed one test and 46 assertions. Each of the three actual export routes served the intended file with the expected MIME type, attachment disposition and file length to an authorized Market Staff reader. Guests were redirected to sign in. The same check verified the v1.4 Help home and quick guide, new billing instructions, workflow image and all four allowlisted figures.
+
+DOCX rendering was attempted with the bundled renderer. The host could not locate LibreOffice `soffice.exe` and returned a secondary temporary-folder cleanup error. Word layout and pagination review remain pending, as does official LGU review. The Laravel preview used disposable SQLite only and was removed after capture.
+

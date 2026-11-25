@@ -4,7 +4,14 @@
 @can('billing.view')
 @php($assessment=$assignment->agreement ? $assignment->agreement->assessment : null)
 @if($assessment)
-@foreach(['period'=>'Assessment reference month','business_category_name'=>'Assessed business category','location_type'=>'Assessed location','floor_area'=>'Assessed area (sq. m.)','rental_rate_sqm'=>'Initial assessed daily rate per sq. m. (PHP)','daily_rental'=>'Initial assessed daily base rent (PHP)','monthly_rental'=>'Reference monthly base rent (PHP)','monthly_cusa'=>'Reference monthly CUSA (PHP)','total_monthly_rental_cusa'=>'Reference monthly total (PHP)'] as $key=>$label)<div class="detailrow"><dt>{{ $label }}</dt><dd>{{ $assessment->$key }}</dd></div>@endforeach
+<div class="detailrow"><dt>{{ $assessment->isFixedDays() ? 'Assessed fixed-day period' : 'Assessment reference month' }}</dt><dd>{{ $assessment->periodLabel() }}</dd></div>
+@foreach(['business_category_name'=>'Assessed business category','location_type'=>'Assessed location','floor_area'=>'Assessed area (sq. m.)','rental_rate_sqm'=>'Initial assessed daily rate per sq. m. (PHP)','daily_rental'=>'Initial assessed daily base rent (PHP)'] as $key=>$label)<div class="detailrow"><dt>{{ $label }}</dt><dd>{{ $assessment->$key }}</dd></div>@endforeach
+@if($assessment->isFixedDays())
+<div class="detailrow"><dt>Period rent payable (PHP)</dt><dd>{{ $assessment->total_monthly_rental_cusa }}</dd></div>
+<div class="detailrow"><dt>CUSA for records only (PHP)</dt><dd>{{ $assessment->monthly_cusa }}</dd></div>
+@else
+@foreach(['monthly_rental'=>'Reference monthly base rent (PHP)','monthly_cusa'=>'Reference monthly CUSA (PHP)','total_monthly_rental_cusa'=>'Reference monthly total (PHP)'] as $key=>$label)<div class="detailrow"><dt>{{ $label }}</dt><dd>{{ $assessment->$key }}</dd></div>@endforeach
+@endif
 <p class="text-xs text-slate-600 mt-3">These values come from the initial assessment.</p>
 @can('view',$assignment->tenant)
 <a class="text-blue-800 underline" href="{{ route('records.show',['tenants',$assignment->tenant_id,'tab'=>'rental']) }}">View Rental Information</a>

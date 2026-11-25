@@ -1,7 +1,8 @@
 <?php
 namespace App\Http\Controllers;
 
-use App\Models\{AuditLog, Business, BusinessCategory, Market, MarketSection, Stall, StallCategory, Tenant};
+use App\Http\Requests\AssignmentRequest;
+use App\Models\{AuditLog, Business, BusinessCategory, Market, MarketSection, RentalAssessment, Stall, StallCategory, Tenant};
 use App\Services\{Ledger, RentalCalculationService, TenantDataService};
 use App\Support\AssignmentRental;
 use Illuminate\Http\Request;
@@ -213,7 +214,7 @@ class TenantController extends Controller
         }
         if ($request->input('registration_action') === 'confirm' && $request->user()->can('rentals.override.request') &&
             $request->user()->can('rentals.override.view') && $request->user()->can('billing.view') && $tenant->assignments()->exists()) {
-            $response->with('registered_rental_link', true);
+            $response->with('registered_rental_link', config('billing.fixed_day_enabled') ? 'fixed_days' : true);
         }
         return $response->with('success', $tenant->status === 'draft' ? 'Registration draft saved.' : 'Tenant saved.');
     }
@@ -227,7 +228,7 @@ class TenantController extends Controller
             'business_category_id'=>'nullable|integer|required_without:business_id|exists:business_categories,id',
             'stall_id'=>'required|integer','start_date'=>'required|date_format:Y-m-d|before_or_equal:today',
             'end_date'=>'nullable|date_format:Y-m-d|after_or_equal:start_date',
-        ]);
+        ] + AssignmentRequest::billingTermsRules());
         $tenant = !empty($data['tenant_id']) ? Tenant::findOrFail($data['tenant_id']) : null;
         if ($tenant) {
             $this->authorize('update', $tenant);
@@ -252,9 +253,15 @@ class TenantController extends Controller
             ->where(function ($query) use ($data) { $query->whereNull('end_date')->orWhere('end_date', '>=', $data['start_date']); })->exists()) {
             throw ValidationException::withMessages(['stall_id'=>'This stall is unavailable for the selected dates or lacks a verified location and area.']);
         }
-        $period = substr($data['start_date'], 0, 7);
-        $amounts = $calculator->resolve($business, $stall, $data['start_date'], $period);
-        return response()->json(['period'=>$period] + Arr::only($amounts, [
+        $period = config('billing.fixed_day_enabled') ? $data['start_date'] : substr($data['start_date'], 0, 7);
+        $amounts = $calculator->resolve($business, $stall, $data['start_date'], $period, Arr::only($data, ['billing_interval_days','daily_cusa']));
+        $assessment = new RentalAssessment(['period'=>$period,'billing_days'=>$amounts['billing_days'],'basis'=>$amounts]);
+        return response()->json([
+            'period'=>$period,
+            'period_label'=>$assessment->periodLabel(),
+            'billing_cycle'=>$amounts['billing_cycle'] ?? 'monthly',
+            'cusa_chargeable'=>$amounts['cusa_chargeable'] ?? true,
+        ] + Arr::only($amounts, [
             'market_name','stall_code','business_category_name','location_type','floor_area','minimum_rate','maximum_rate',
             'rental_rate_sqm','daily_rental','billing_days','billing_day_rule','daily_cusa','monthly_rental','monthly_cusa',
             'total_monthly_rental_cusa','advance_rental','security_deposit','total_initial_payment','advance_deposit_authorized',
@@ -283,7 +290,9 @@ class TenantController extends Controller
         $data = compact('record','tabs','tab');
         if (in_array($tab, ['assignments','rental','helpers'], true)) {
             $data['profileAssignments'] = $record->assignments()->with('stall.market','stall.section','stall.category','business.businessCategory')
-                ->when($actor->can('billing.view'), function ($query) { $query->with('agreement.assessment'); })
+                ->when($actor->can('billing.view') || ($tab === 'assignments' && $actor->can('contracts.create')), function ($query) {
+                    $query->with('agreement.assessment');
+                })
                 ->when($tab === 'rental' && $actor->can('rentals.override.view') && $actor->can('rentals.override.history'), function ($query) {
                     $query->withCount(['rentalOverrides as pending_override_count'=>fn ($overrides) => $overrides->where('status', 'pending')]);
                 })
@@ -295,6 +304,9 @@ class TenantController extends Controller
             $data['requestMonths'] = [];
             if ($actor->can('rentals.override.view')) {
                 foreach ($data['profileAssignments'] as $assignment) {
+                    if (optional(optional($assignment->agreement)->assessment)->isFixedDays()) {
+                        continue;
+                    }
                     $assignment->setRelation('tenant', $record);
                     $data['rentalQuotes'][$assignment->id] = AssignmentRental::quote($assignment, $data['period']);
                     if ($actor->can('rentals.override.request')) {

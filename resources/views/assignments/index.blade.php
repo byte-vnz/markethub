@@ -5,7 +5,8 @@
 @section('content')<section class="panel tablewrap" role="region" aria-label="Stall assignments" tabindex="0"><table><thead><tr><th scope="col">Stall / tenant</th><th scope="col">Agreement</th><th scope="col">Dates</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead><tbody>@forelse($assignments as $a)<tr><td>{{ $a->stall->code }}<br>{{ $a->tenant->name }}<br>{{ optional($a->business)->name }}</td><td>@if($a->agreement)
 {{ $a->agreement->reference }}<br>PHP {{ $a->agreement->monthly_amount }}
 @if($a->agreement->assessment)
-<br><small>{{ $a->agreement->assessment->period }} reference month · {{ $a->agreement->assessment->business_category_name }} · {{ ucfirst($a->agreement->assessment->location_type) }}</small>
+@php($assessment = $a->agreement->assessment)
+<br><small>{{ $assessment->isFixedDays() ? $assessment->billing_days.'-day period' : 'Reference month' }} {{ $assessment->periodLabel() }} · {{ $assessment->business_category_name }} · {{ ucfirst($assessment->location_type) }}</small>
 @else
 <br><small>Legacy monthly rent</small>
 @endif

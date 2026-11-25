@@ -1,8 +1,8 @@
 <?php
 
 return [
-    "version" => "1.3",
-    "updated" => "2026-11-20",
+    "version" => "1.4",
+    "updated" => "2026-11-26",
     "manual" => base_path("docs/user-manual/USER_MANUAL.md"),
     "quick" => base_path("docs/user-manual/QUICK_REFERENCE_GUIDE.md"),
     "workflows" => base_path("docs/user-manual/workflows/README.md"),
@@ -59,7 +59,7 @@ return [
             "path" => base_path("docs/user-manual/workflows/04-stall-assignment.png"),
             "label" => "Stall assignment",
             "alt" =>
-                "Check business ownership, verified stall location and area, effective approved category rates and policy, then freeze the assessed agreement.",
+                "Check business ownership, stall location and area, approved category rates and any required policy, then freeze the agreement.",
         ],
         "05-contract" => [
             "path" => base_path("docs/user-manual/workflows/05-contract.png"),
@@ -69,9 +69,9 @@ return [
         ],
         "06-payment" => [
             "path" => base_path("docs/user-manual/workflows/06-payment.png"),
-            "label" => "Payment recording and correction",
+            "label" => "Rental billing and payment recording",
             "alt" =>
-                "Review posted bills, record draft payment, verify allocations, post and reconcile; correct through authorized reversal.",
+                "Generate and post monthly or fixed-day bills, then record, allocate, post and reconcile payments.",
         ],
         "07-renewal-termination" => [
             "path" => base_path("docs/user-manual/workflows/07-renewal-termination.png"),

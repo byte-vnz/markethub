@@ -1,18 +1,18 @@
 flowchart TD
-    N0["Administrator: Configure markets, classified stalls, authorized rates and rental policies."]
+    N0["Administrator: Configure markets, classified stalls, approved rates and applicable rental policies."]
     N1["Market personnel: Register tenant and linked businesses. Stage stall choices if needed."]
     N0 --> N1
     N2["Assignment manager: Confirm authorized occupancy. Review the frozen assessment."]
     N1 --> N2
-    N3["Contract officers: Draft from the assessment, generate, review and issue where authorized."]
+    N3["Contract officers: For eligible monthly terms, draft, generate, review and issue where authorized."]
     N2 --> N3
     N3 -->|Validation fails| F3["Stop at unmet policy or visual-review gates"]
-    N4["Billing / Collection: Post reviewed monthly bills and exact payment allocations"]
+    N4["Billing / Collection: Post reviewed monthly or fixed-day bills and exact payment allocations."]
     N3 --> N4
     N5["Management / Treasury: Review dashboard, reports, outstanding balances and reconciliation"]
     N4 --> N5
     N6["Assignment / contract officers: Renew or close contracts and separately end / transfer occupancy"]
     N5 --> N6
-    N6 -->|Validation fails| F6["Respect overlap and full-month billing restrictions"]
+    N6 -->|Validation fails| F6["Respect overlap and protected billing coverage."]
     N7["Authorized reviewer: Retain assessments, posted records, original documents and audit history."]
     N6 --> N7

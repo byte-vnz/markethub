@@ -1,8 +1,8 @@
 flowchart TD
-    N0["Billing officer: Generate a full-month draft from the assessment or legacy agreement."]
-    N1["Posting officer: Review base rent and CUSA for assessed bills. Explicitly post."]
+    N0["Billing officer: Generate a complete month or aligned fixed-day draft."]
+    N0 -->|Validation fails| F0["Check eligibility, cycle, due date and coverage."]
+    N1["Posting officer: Review amount and coverage. Fixed-day CUSA is for reference. Explicitly post."]
     N0 --> N1
-    N1 -->|Validation fails| F1["Draft generation never automatically posts"]
     N2["Collection officer: Enter payment date, method, reference and exact positive amount"]
     N1 --> N2
     N3["Application: Check receipt history and allocate entire amount to tenant posted bills"]

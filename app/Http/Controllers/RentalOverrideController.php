@@ -26,6 +26,10 @@ class RentalOverrideController extends Controller
     {
         $this->scope($tenant, $assignment, 'history');
         $period = $this->period($request);
+        if (optional(AssignmentRental::initial($assignment))->isFixedDays()) {
+            return $this->profileRedirect($request, $tenant)->with('rental_mode_notice',
+                'Monthly rental overrides are unavailable for fixed-day agreements.');
+        }
         $rows = $assignment->rentalOverrides()->with(['requester:id,name', 'approver:id,name', 'initialAssessment'])
             ->latest('revision')->paginate(10)->withQueryString();
         $user = $request->user();
@@ -53,6 +57,10 @@ class RentalOverrideController extends Controller
     {
         $this->scope($tenant, $assignment, 'request');
         $period = $this->period($request);
+        if (optional(AssignmentRental::initial($assignment))->isFixedDays()) {
+            return $this->profileRedirect($request, $tenant)->with('rental_mode_notice',
+                'Monthly rental overrides are unavailable for fixed-day agreements.');
+        }
         $input = $request->validate([
             'source_override_id'=>'nullable|integer|min:1', 'computation_mode'=>'nullable|in:automatic,manual_override',
         ]);

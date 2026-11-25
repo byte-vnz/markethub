@@ -123,4 +123,8 @@ return [
     "stalls--63-map-override-details" => base_path("docs/user-manual/screenshots/stalls/63-map-override-details.jpg"),
     "authentication--64-mobile-navigation-fallback" => base_path("docs/user-manual/screenshots/authentication/64-mobile-navigation-fallback.png"),
     "contracts--66-termination-confirmation" => base_path("docs/user-manual/screenshots/contracts/66-termination-confirmation.png"),
+    "stalls--67-fixed-day-assignment" => base_path("docs/user-manual/screenshots/stalls/67-fixed-day-assignment.png"),
+    "tenants--68-fixed-day-preview" => base_path("docs/user-manual/screenshots/tenants/68-fixed-day-preview.png"),
+    "payments--69-fixed-day-generation" => base_path("docs/user-manual/screenshots/payments/69-fixed-day-generation.png"),
+    "payments--70-fixed-day-bill" => base_path("docs/user-manual/screenshots/payments/70-fixed-day-bill.png"),
 ];

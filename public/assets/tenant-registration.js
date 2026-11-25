@@ -97,19 +97,26 @@
         if (!amounts) return;
         const detail = document.createElement('dl');
         const money = key => `PHP ${amounts[key]}`;
+        const fixedDays = amounts.billing_cycle === 'fixed_days';
         const lines = [
             ['Floor area', `${amounts.floor_area} sq. m.`],
             ['Minimum / maximum per sq. m.', `${money('minimum_rate')} / ${money('maximum_rate')}`],
             ['Applied rate per sq. m.', `${money('rental_rate_sqm')} (${titleCase(amounts.location_type)})`],
             ['Daily rental', money('daily_rental')],
-            ['Billing days', `${amounts.billing_days} (${amounts.billing_day_rule})`],
-            ['Daily CUSA', money('daily_cusa')],
-            ['Monthly rental', money('monthly_rental')],
-            ['Monthly CUSA', money('monthly_cusa')],
-            ['Monthly total', money('total_monthly_rental_cusa')],
-            ['Two months’ advance', money('advance_rental')],
-            ['Security deposit', money('security_deposit')],
-            ['Advance and deposit total', money('total_initial_payment')],
+            ['Billing days', fixedDays ? String(amounts.billing_days) : `${amounts.billing_days} (${amounts.billing_day_rule})`],
+            ...(fixedDays ? [
+                ['Daily CUSA for records only', money('daily_cusa')],
+                ['CUSA for the period (records only)', money('monthly_cusa')],
+                ['Period rent payable', money('total_monthly_rental_cusa')],
+            ] : [
+                ['Daily CUSA', money('daily_cusa')],
+                ['Monthly rental', money('monthly_rental')],
+                ['Monthly CUSA', money('monthly_cusa')],
+                ['Monthly total', money('total_monthly_rental_cusa')],
+                ['Two months’ advance', money('advance_rental')],
+                ['Security deposit', money('security_deposit')],
+                ['Advance and deposit total', money('total_initial_payment')],
+            ]),
         ];
         for (const [label, amount] of lines) {
             const pair = document.createElement('div');
@@ -122,7 +129,7 @@
             detail.append(pair);
         }
         container.append(detail);
-        if (!amounts.advance_deposit_authorized) {
+        if (!fixedDays && !amounts.advance_deposit_authorized) {
             container.append(paragraph('Advance and deposit are estimates. The market policy does not authorize their collection.'));
         }
     }
@@ -145,6 +152,11 @@
             start_date: row.querySelector('[data-assignment-start]').value,
             end_date: row.querySelector('[data-assignment-end]').value || null,
         };
+        const interval = row.querySelector('[data-billing-days]');
+        if (interval) {
+            payload.billing_interval_days = interval.value || null;
+            payload.daily_cusa = row.querySelector('[data-daily-cusa]').value || null;
+        }
         const active = business?.row.querySelector('[data-business-status]').value === 'active';
         const fingerprint = JSON.stringify([payload, active]);
         if (state.fingerprint === fingerprint) return;
@@ -154,7 +166,7 @@
             showPreview(state.container, label, 'Choose an active business with a category, a stall and a start date.');
             return;
         }
-        showPreview(state.container, label, 'Checking the approved rate and policy…');
+        showPreview(state.container, label, interval ? 'Checking the approved rate and billing interval…' : 'Checking the approved rate and policy…');
         const abort = new AbortController();
         state.abort = abort;
         fetch(previewUrl, {
@@ -170,7 +182,7 @@
             const result = await response.json();
             if (abort.signal.aborted) return;
             if (response.ok) {
-                showPreview(state.container, label, `${result.business_category_name} · ${result.period}`, result);
+                showPreview(state.container, label, `${result.business_category_name} · ${result.period_label}`, result);
             } else {
                 showPreview(state.container, label, Object.values(result.errors || {}).flat()[0] || 'Rental preview is unavailable. Reload the form to try again.');
             }
@@ -194,7 +206,7 @@
     });
 
     form.addEventListener('change', event => {
-        if (event.target.matches('select, input[type=date]')) update();
+        if (event.target.matches('select, input[type=date], [data-billing-days], [data-daily-cusa]')) update();
     });
 
     form.addEventListener('click', event => {

@@ -49,8 +49,10 @@ class AssignmentController extends Controller
     public function transferForm(StallAssignment $assignment)
     {
         $this->authorize("assignments.manage");
+        $assessment = optional($assignment->agreement)->assessment;
         return view("assignments.transfer", [
             "assignment" => $assignment,
+            "originalInterval" => optional($assessment)->isFixedDays() ? $assessment->billing_days : null,
             "stalls" => Stall::where(function ($query) use ($assignment) {
                 $query->whereIn("status", ["vacant", "reserved"])
                     ->orWhere("id", $assignment->stall_id);

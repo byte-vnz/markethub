@@ -113,7 +113,8 @@ class MapController extends Controller
                 ->get();
         }
         $assessment = $assignment ? AssignmentRental::initial($assignment) : null;
-        [$quote, $quoteError] = $assignment && $canSeeComputation ? AssignmentRental::quote($assignment, $period) : [null, null];
+        [$quote, $quoteError] = $assignment && $canSeeComputation && !optional($assessment)->isFixedDays()
+            ? AssignmentRental::quote($assignment, $period) : [null, null];
         $lease = $assignment && $request->user()->can('contracts.view') ? \App\Models\LeaseContract::where('stall_assignment_id',$assignment->id)->latest('id')->first() : null;
         return response()->view(
             "map.details",

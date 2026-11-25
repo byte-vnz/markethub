@@ -45,6 +45,8 @@ class LeaseContractService
             $this->check($agreement && $agreement->assessment,
                 "Renew this assignment before creating a contract from an approved category assessment.");
             $initial = $agreement->assessment;
+            $this->check(!$initial->isFixedDays(),
+                'The monthly contract template cannot be used for fixed-day agreements. A compatible approved template and workflow are required.');
             $business = $a->business()->lockForUpdate()->first();
             $tradeFields = ["name", "line_of_business", "permitted_goods"];
             $this->check($business && $business->status === "active" &&

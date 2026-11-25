@@ -20,9 +20,13 @@ class DraftMonthlyBills extends Command
         }
         $failed = 0;
         StallAssignment::where("status", "active")
+            ->with('agreement.assessment')
             ->orderBy("id")
             ->chunkById(100, function ($items) use ($service, $actor, &$failed) {
                 foreach ($items as $a) {
+                    if (optional(optional($a->agreement)->assessment)->isFixedDays()) {
+                        continue;
+                    }
                     try {
                         $b = $service->generate(
                             $actor,

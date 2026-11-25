@@ -133,7 +133,8 @@ class TenantDataService
             if (!$businessId) {
                 throw ValidationException::withMessages(['pending_assignments.'.$index.'.business_key'=>'Choose a business from this registration.']);
             }
-            $selection = Arr::only($selection, ['stall_id','start_date','end_date','concurrent_authorization_reference','concurrent_authorization_reason','helpers']);
+            $selection = Arr::only($selection, ['stall_id','start_date','end_date','concurrent_authorization_reference',
+                'concurrent_authorization_reason','helpers','billing_interval_days','daily_cusa']);
             $selection['helpers'] = Validator::make(['helpers'=>$selection['helpers'] ?? []], TenantRequest::helperRules('helpers'))->validate()['helpers'];
             $selection['business_id'] = $businessId;
             if ($action === 'draft') {

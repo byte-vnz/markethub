@@ -46,8 +46,7 @@ class LeaseContractController extends Controller
             }
             $tenantId = $selected->tenant_id;
         }
-        return view("contracts.create", [
-            "assignments" => StallAssignment::with(["tenant", "agreement.assessment"])
+        $scopedAssignments = StallAssignment::with(["tenant", "agreement.assessment"])
                 ->where("status", "active")
                 ->whereHas("tenant", function ($query) {
                     $query->where("status", "active");
@@ -57,7 +56,13 @@ class LeaseContractController extends Controller
                 })
                 ->when($tenantId,function ($query) use ($tenantId) { $query->where('tenant_id',$tenantId); })
                 ->orderBy("tenant_id")
-                ->get(),
+                ->get();
+        [$fixed, $monthly] = $scopedAssignments->partition(function (StallAssignment $assignment) {
+            return optional($assignment->agreement->assessment)->isFixedDays();
+        });
+        return view("contracts.create", [
+            'assignments' => $monthly,
+            'hasFixedDayAssignments' => $fixed->isNotEmpty(),
             "templates" => ContractTemplate::where("approved", true)->get(),
             "submissionKey" => (string) Str::uuid(),
             "selectedTenant" => $tenantId ? \App\Models\Tenant::findOrFail($tenantId) : null,

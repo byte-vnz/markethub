@@ -1,9 +1,12 @@
 @extends('layouts.app')
 @section('title',$bill->reference)
 @section('subtitle','Rental bill and authoritative allocation history.')
-@section('content')<section class="panel"><div class="grid md:grid-cols-3 gap-5"><div><h2>{{ $bill->tenant->name }}</h2><p>{{ $bill->assessment->stall_code ?? $bill->stall->code }} · {{ $bill->period }}</p>
+@section('content')<section class="panel"><div class="grid md:grid-cols-3 gap-5"><div><h2>{{ $bill->tenant->name }}</h2><p>{{ $bill->assessment->stall_code ?? $bill->stall->code }} · {{ $bill->periodLabel() }}</p>
 @if($bill->assessment)
 <p>{{ $bill->assessment->business_category_name }} · {{ ucfirst($bill->assessment->location_type) }} · {{ $bill->assessment->billing_days }} billing days</p>
+@if($bill->assessment->isFixedDays())
+<p>CUSA for records only · PHP {{ $bill->assessment->monthly_cusa }} for the period.</p>
+@endif
 @else
 <p>Legacy monthly rent</p>
 @endif

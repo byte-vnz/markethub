@@ -88,3 +88,9 @@ The user approved the frontend modernization design. Implementation keeps Blade,
 ## PHP 7.4 production parse error — 2026-11-24
 
 The production screenshot identified PHP 8-only parenthesized dynamic class construction in RecordController. Replaced all three application occurrences in RecordController (create/save) and RecordRequest (relation validation) with class-name variables. The existing parser's version target is best-effort; scripts/check-php74.php now explicitly rejects this syntax and no longer labels its result as a strict grammar check. See docs/operations/PHP74_PARSE_ERROR.md for operator commands and debug-display precautions. No data/schema/permission/UI workflow change; manuals and exports do not require rebuilding for this syntax-only correction. Native PHP 7.4 and production verification remain operator tasks.
+
+## Adjustable fixed-day billing — 2026-11-25
+
+The user approved separate weekly bills with a configurable interval, record-only CUSA and disposable verification. The switch is off by default. New fixed-day terms default to seven days and freeze the selected interval, exact rental basis and record-only CUSA. A first ordinary assignment needs an effective approved category rate. The existing market-policy authority check still applies to concurrent occupancy. Historical monthly values and approval paths remain authoritative for existing monthly assignments. Fixed-day billing uses complete intervals anchored to the assignment start and explicit posting.
+
+Use [the design](../superpowers/specs/2026-11-25-fixed-day-billing-design.md) and [the operator runbook](../operations/FIXED_DAY_BILLING.md). Live database access, migrations, seeding and activation are outside the prepared change.

@@ -24,6 +24,7 @@
         </div>
         <div><label for="stall-{{ $assignmentKey }}-start">Start date</label><input type="date" id="stall-{{ $assignmentKey }}-start" name="pending_assignments[{{ $assignmentKey }}][start_date]" value="{{ $selection['start_date'] ?? today()->toDateString() }}" max="{{ today()->toDateString() }}" data-assignment-start required @include('components.field-error-attributes', ['field'=>'pending_assignments['.$assignmentKey.'][start_date]','id'=>'stall-'.$assignmentKey.'-start'])>@include('components.field-error', ['field'=>'pending_assignments['.$assignmentKey.'][start_date]','id'=>'stall-'.$assignmentKey.'-start'])</div>
         <div><label for="stall-{{ $assignmentKey }}-end">End date <span class="text-slate-500 font-normal">(optional)</span></label><input type="date" id="stall-{{ $assignmentKey }}-end" name="pending_assignments[{{ $assignmentKey }}][end_date]" value="{{ $selection['end_date'] ?? '' }}" data-assignment-end @include('components.field-error-attributes', ['field'=>'pending_assignments['.$assignmentKey.'][end_date]','id'=>'stall-'.$assignmentKey.'-end'])>@include('components.field-error', ['field'=>'pending_assignments['.$assignmentKey.'][end_date]','id'=>'stall-'.$assignmentKey.'-end'])</div>
+        @include('assignments.billing-terms', ['billingFieldPrefix'=>'pending_assignments['.$assignmentKey.']','billingIdPrefix'=>'stall-'.$assignmentKey])
     </div>
     <details class="mt-3">
         <summary class="cursor-pointer text-sm font-semibold text-slate-700">Concurrent assignment authorization</summary>

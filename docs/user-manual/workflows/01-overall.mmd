@@ -1,14 +1,14 @@
 flowchart TD
-    N0["Administrator: Configure markets and classified stalls. Approve category rates and rental policies."]
+    N0["Administrator: Configure markets and classified stalls. Approve category rates and applicable policies."]
     N1["Market personnel: Register the tenant and linked businesses. Save a draft when needed."]
     N0 --> N1
     N2["Assignment manager: Review the rental preview and confirm eligible occupancy."]
     N1 --> N2
     N2 -->|Validation fails| F2["Resolve missing approvals, stall classification or a conflicting assignment."]
-    N3["Contract officers: Draft from the assessment, generate, review and issue through approval gates."]
+    N3["Contract officers: For eligible monthly assignments, draft, generate, review and issue through approval gates."]
     N2 --> N3
     N3 -->|Validation fails| F3["Keep the document at its current stage until eligible."]
-    N4["Billing officer: Generate monthly drafts from the frozen rental basis, then review and post."]
+    N4["Billing officer: Generate complete monthly or fixed-day drafts, then review and explicitly post."]
     N3 --> N4
     N5["Collection officer: Record, allocate and post payments against eligible posted bills."]
     N4 --> N5

@@ -20,7 +20,7 @@ Run from the repository root:
 
 ```powershell
 & $manualPython scripts/build-user-manual.py --self-check
-& $manualPython scripts/build-user-manual.py --version 1.3 --date 2026-11-20
+& $manualPython scripts/build-user-manual.py --version 1.4 --date 2026-11-26
 ```
 
 The self-check uses disposable document fixtures only. It checks Markdown parsing, PDF print bounds, DOCX hyperlink/bookmark XML, and rejection of missing images. It does not connect to any application database.
@@ -65,7 +65,7 @@ Inspect all PDF page PNGs or contact sheets, and open representative pages at fu
 Render the DOCX separately with the bundled documents skill renderer on a workstation with Word/LibreOffice support:
 
 ```powershell
-& $manualPython 'C:\Users\vnz\.codex\plugins\cache\openai-primary-runtime\documents\26.1118.11504\skills\documents\render_docx.py' docs/user-manual/exports/Market_Stall_User_Manual.docx --output_dir docs/user-manual/qa/word-render --emit_pdf
+& $manualPython 'C:\Users\vnz\.codex\plugins\cache\openai-primary-runtime\documents\26.1123.11515\skills\documents\render_docx.py' docs/user-manual/exports/Market_Stall_User_Manual.docx --output_dir docs/user-manual/qa/word-render --emit_pdf
 ```
 
 If a Word/LibreOffice renderer is unavailable, record the failed attempt and leave DOCX visual/pagination verification explicitly pending. The separately generated PDF is not evidence that Word renders identically. Do not claim approved government distribution, legal contract fidelity or human visual-review authorization from a document build.

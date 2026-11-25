@@ -4,10 +4,13 @@
 
 # Complete User Manual
 
-**Operational reference v1.3 — prepared for LGU review**  
-**Preparation date:** 20 November 2026  
-**Application:** MarketHub, Laravel 8.83.29, working source snapshot of 20 November 2026  
-**Source revision:** no Git commit identifier is available for this workspace.
+**Operational reference v1.4 — prepared for LGU review**
+
+**Preparation date:** 26 November 2026
+
+**Application:** MarketHub, Laravel 8.83.29, working source snapshot of 26 November 2026
+
+**Source revision:** recorded in the export build manifest.
 
 This document describes the implemented application. It is a training and operational reference prepared for review; it does not represent an approved official LGU manual, a legal opinion, a policy approval, or production acceptance. Only duly authorized personnel can approve rates, templates, contract issuance, and financial corrections. No signature, official seal, or approval is invented here.
 
@@ -15,6 +18,7 @@ Screenshots show the actual application using synthetic records in an isolated d
 
 | Revision | Date | Description | Approval status |
 | --- | --- | --- | --- |
+| 1.4 | 2026-11-26 | Optional fixed-day assignments and separate billing periods | LGU review pending |
 | 1.3 | 2026-11-20 | Keyboard navigation, form recovery, scrollable tables and contract confirmations | LGU review pending |
 | 1.2 | 2026-11-19 | Market Sections and assignment-specific rental overrides | LGU review pending |
 | 1.1 | 2026-11-18 | Unified tenant registration, business categories, rental assessments and three reports | LGU review pending |
@@ -41,17 +45,17 @@ Screenshots show the actual application using synthetic records in an isolated d
 
 ### 1.1 Purpose and intended users
 
-MarketHub connects market and stall records, tenant profiles, occupancy assignments, rental agreements, monthly bills, recorded payment references, monitoring and reports. Its purpose is to give authorized market personnel a consistent record of who occupies a stall and the financial activity attached to that occupancy. It keeps historical assignments and posted financial records instead of replacing them with a new tenant or an editable balance.
+MarketHub connects market and stall records, tenant profiles, occupancy assignments, rental agreements, bills, recorded payment references, monitoring and reports. Its purpose is to give authorized market personnel a consistent record of who occupies a stall and the financial activity attached to that occupancy. It retains earlier assignments and posted financial records.
 
 Administrators configure locations, rates, accounts and approved access. Market personnel maintain stalls and tenants within their permissions. Collection officers record and post authorized payment information. Treasury/Accounting personnel review corrections and reconciliation. Management viewers monitor occupancy and permitted aggregate reports. These are the six existing application roles; job titles outside the application do not automatically grant access.
 
 ### 1.2 Capabilities and boundaries
 
-Implemented modules include login/logout; the dashboard; markets and sections; stall categories and stalls; a persistent grid map; unified tenant and business management; assignment, ending, transfer and renewal history; approved business-category rates, market rental policies and frozen assessments; lease contracts and template registration; monthly billing drafts and posting; approved adjustments; payment drafts, posting, voids, reversals and linked corrections; Treasury confirmation; receivables; twenty reports; account administration, settings and audit logs.
+Implemented workflows cover authentication, the dashboard, markets and inventory, the stall map, tenant and business registration, assignments and renewals, rent approvals and frozen assessments, supported monthly lease contracts, billing and payment drafts and posting, financial corrections, Treasury reconciliation, receivables, twenty reports, accounts, settings and the audit log. MIS can enable fixed-day terms for new assignments following the rollout procedure.
 
 The current application has no self-service account profile, change-password screen, password-recovery screen, official receipt issuance, workbook import interface, separate building/zone registry, drag-and-drop map editor, arbitrary permission editor, automatic lease renewal, or dashboard widget for expiring contracts. Floor/building is a stall text field. Sections represent the configured subdivisions. Existing tenant records can be archived or deactivated; the application does not expose ordinary record deletion routes.
 
-New assessed agreements share one approved rental basis across assignment, billing and contract preparation. The assessment uses the business category, stall location and area, and the effective market policy. Older legacy agreements keep their stored monthly amount. The advance and deposit figures describe the rental calculation. Monthly billing covers eligible full months, and advance credits, deposit accounting and weekly billing require separate authorization and implementation.
+Monthly assessments use the approved category rate, stall location and area, and the effective market policy. Legacy agreements use their saved monthly amount. With the opt-in feature enabled, new assignments and renewals use fixed-day terms. The assessment freezes a chosen interval, normally seven days, and uses the approved category rate and verified stall measurements. It records optional CUSA separately and bills base rent for each complete interval. Existing controls govern posting and corrections.
 
 ### 1.3 Requirements and access
 
@@ -69,14 +73,14 @@ The source targets PHP 7.4 syntax, Laravel 8.83.29, MySQL and locally compiled T
 | Stall | Physical inventory record within a market and section. |
 | Assignment | Dated relationship between a tenant and a stall, with occupancy history. |
 | Rental agreement | Financial terms created with an assignment, linked to an assessment or to a legacy monthly rate. |
-| Rental assessment | Frozen record of the approved rate, market policy, stall measurements and calculated amounts for a reference billing period. |
+| Rental assessment | Frozen record of the approved rate, stall measurements, billing terms and calculated amounts for a reference period. Includes the applicable market policy when required. |
 | Lease contract | Separately controlled document record with private generated files and approval stages. |
 | Draft | Saved for review; it has not yet become posted financial activity. |
 | Posted | Committed through the authorized financial workflow; corrections append history. |
 | Allocation | Portion of a recorded payment applied to one posted bill. |
 | Reversal | Preserved correction that removes a posted payment's effect from balances. |
 | Treasury confirmation | Separate reconciliation status; posting initially remains pending. |
-| CUSA | Charge label used by the supplied source; applicable rate and policy need authorization. |
+| CUSA | The approved monthly treatment is kept on monthly records. Fixed-day assessments can record CUSA for reference only. |
 | Approval reference | Reference to an actual authorized policy, decision or review; free text alone does not create authority. |
 
 ### 1.5 Read the workflow before entering records
@@ -249,7 +253,7 @@ Use the sequence below because selectors and validation depend on parent records
 4. **Settings → Stall Categories:** create the approved category names.
 5. **Management → Stall Management:** register stalls under the correct market/section, verify floor area and choose Inner or Outer.
 6. **Settings → Business Categories:** review the category and its dated, authorized rate revision.
-7. **Settings → Rental Policies:** verify the market’s effective approval for CUSA, billing days, additional occupancy and advance/deposit terms.
+7. **Settings → Rental Policies.** Verify effective approvals for monthly calculation and for additional occupancy. MIS follows the fixed-day rollout runbook when authorizing fixed-day assignment creation.
 8. **Management → Market Stall Layout → Edit layout:** arrange registered inventory if required.
 9. **Settings → Contract Templates:** have the authorized officer register and review the source template before contract preparation.
 10. **Settings → System Settings:** set the organization display name and optional notice.
@@ -317,9 +321,9 @@ Figure 47. Category rate history and review controls in the training environment
 
 1. Open **Settings → Rental Policies**. With `rates.manage`, prepare a dated market-policy draft with an official reference and explicit daily CUSA, including zero when authorized.
 2. Choose **Calendar days** to use the actual days in each billing month, including leap years. Choose **Fixed days** only when the approved policy supplies a count, from 1 to 366. Enter that count. Additional occupancy requires an authorized maximum concurrent-assignment count. Record the advance/deposit authorization where the policy provides it.
-3. With `rates.approve`, compare the displayed revision to the approved policy and select **Approve policy**. The changed-draft check and effective-range rules also apply here. A missing effective policy blocks an otherwise eligible new assessment.
+3. With `rates.approve`, compare the displayed revision to the approved policy and select **Approve policy**. The changed-draft check and effective-range rules also apply here. Monthly assessments and concurrent occupancy need an eligible policy.
 
-Review stored historical monthly rates in **Settings → Legacy Rental Rates**. They remain the basis for eligible legacy agreements. New assessments resolve category rates and market policy automatically.
+Review stored historical monthly rates in **Settings → Legacy Rental Rates**. They remain the basis for eligible legacy agreements. The **Fixed days** choice in a monthly market policy sets the day multiplier for a monthly bill. Separate fixed-day bills are available for assignments created with the opt-in feature. The ordinary single-assignment path requires an approved category rate and does not require a market policy. For installation and activation, see `docs/operations/FIXED_DAY_BILLING.md`.
 
 ![Market rental policies](screenshots/categories/48-rental-policy.jpg)
 
@@ -374,7 +378,7 @@ Figure 55. Searchable stall section selector in isolated fictional data.
 1. Open **Management → Market Stall Layout**.
 2. Select market, optional section, occupancy status or stall location. Users with tenant access can also filter by business category. Select **Apply filters**.
 3. Select a stall tile. Verify current location and area. Historical assessments can show different assessed values when master data was later corrected.
-4. If permitted, inspect the tenant and business, assessed rate and reference-period rent plus CUSA, posted balance, lease status and recent payment/assignment history.
+4. If permitted, inspect the tenant and business, assessed rate, reference-period rent, CUSA, posted balance, lease status and recent payment or assignment history. On a fixed-day assignment, CUSA appears for reference and the payable amount is period base rent.
 5. Use the available detail-panel links to open full tenant, assignment, billing or payment records.
 
 **Expected response:** the side panel loads server records for the selected stall. It shows only information your permissions allow; the viewer role does not gain tenant or payment detail merely by seeing the map. The panel limits assignment history to ten records and effective recent payments to five; use full lists for more. **Validation:** no matching tiles can mean the filters exclude all stalls. **Common mistakes:** reading the previous selection while a request is loading or expecting the latest payment for a stall to represent only today's tenant. Stall history can include earlier occupancy.
@@ -408,8 +412,8 @@ Open **Management → Tenant Management → Register tenant**. Use the seven sec
 1. **Personal:** enter verified last and first names, middle name/initial where supplied, civil status, gender, citizenship, residential address and contact information.
 2. **Identification:** enter previous and present account numbers as text, preserving leading zeroes. Record verified government-ID information and issuance details or a documented exception where supported.
 3. **Businesses:** add one or more businesses under the same tenant. Select an active business category and enter applicable trade, permitted goods/services, permit and registration details. A commercial name is optional for an individual stallholder.
-4. **Stall selections:** for each intended assignment choose the business and eligible classified stall. Enter the start date, optional end date and unique agreement reference. Stall location and area come from Stall Management. Check additional-occupancy authority before proceeding. Use verified permitted goods/services of 1–180 characters for any business selected for a new assessment.
-5. **Rental preview:** calculate and review the server preview. Check the category, stall area and location, the approved minimum/maximum and applied rate, billing days, base rent and CUSA. See Chapter 7 for the calculation.
+4. **Stall selections.** For each intended assignment choose the business and eligible classified stall. Enter the start date, optional end date and unique agreement reference. If fixed-day fields are available, check the suggested billing interval and enter any daily CUSA you need to keep for reference. Stall location and area come from Stall Management. Check additional-occupancy authority before proceeding. Use verified permitted goods/services of 1–180 characters for any business selected for a new assessment.
+5. **Rental preview.** Verify the category, stall area and location, approved minimum and maximum, applied daily rate and billing basis. In a fixed-day preview, verify the selected day count, base rent payable and any record-only CUSA. See Chapter 7 for the calculation.
 6. **Helpers:** enter up to two helpers for each pending assignment.
 7. **Review:** select **Save draft** if more evidence or assignment authority is needed. Select **Confirm registration** after review if authorized. This saves the tenant and any submitted assignments together. Contracts are prepared separately.
 
@@ -423,11 +427,15 @@ Figure 06. Tenant Management search and relationship filters.
 
 ![Unified tenant registration](screenshots/tenants/49-unified-registration.jpg)
 
-Figure 49. Unified registration form in the fictional training environment.
+Figure 49. Monthly training example of the unified registration form.
 
 ![Rental calculation preview](screenshots/tenants/50-rental-preview.jpg)
 
-Figure 50. Training preview for an Outer stall of 10 sq. m. under the Vegetables category.
+Figure 50. Monthly training preview for an Outer stall of 10 sq. m. under the Vegetables category.
+
+![Fixed-day rental preview showing nine billing days, rent and CUSA](screenshots/tenants/68-fixed-day-preview.png)
+
+Figure 68. Fictional nine-day registration preview. The period is 3–11 November, base rent payable is PHP 1,800.00 and record-only CUSA is PHP 90.00.
 
 ![Tenant validation](screenshots/tenants/08-validation.png)
 
@@ -531,10 +539,10 @@ Attendance-sheet time/signature fields remain attendance-only; there is no atten
 
 1. With MA or SA, open **Management → Stall Assignments → Assign a tenant**, or confirm the pending selections in unified registration.
 2. Choose an eligible vacant/reserved stall, active tenant and the tenant’s active business with an active category.
-3. Enter the start date, optional end date, unique agreement reference and remarks. If this adds concurrent occupancy, record its authorization reference and reason. On the proposed start date, the effective policy of every involved market must permit the tenant’s total concurrent assignments across markets.
+3. Enter the start date, optional end date, unique agreement reference and remarks. If available, choose a **Billing interval (days)** of 1 to 366. The installation suggests seven days unless MIS has configured a different default. Enter **Daily CUSA for records only (PHP)** when applicable. If the assignment adds concurrent occupancy, enter the authorization reference and reason. On the proposed start date, the effective policy of every involved market must permit the tenant’s total concurrent assignments across markets.
 4. Save. Inspect the agreement under the profile’s **Stall Assignments** and **Rental Information** tabs. Check the stall’s occupied status on the map.
 
-**Expected response:** the application saves the assignment, agreement and immutable rental assessment together. **Validation:** active market/section, eligible dates, no conflicting occupancy, verified Inner/Outer and positive floor area, and applicable approved category schedule and market policy are required. Pending choices without those approvals can stay in a registration draft. **Common mistake:** assuming that a policy for one market allows the tenant to exceed another involved market’s limit.
+**Expected response:** the application saves the assignment, agreement and immutable rental assessment together. **Validation:** active market and section, eligible dates, no conflicting occupancy, verified Inner or Outer classification, positive area and an effective approved category rate are required. Monthly assessments and concurrent occupancy additionally require an effective approved market policy. Pending choices can stay in a registration draft while awaiting approvals. **Common mistake:** assuming that a policy for one market allows the tenant to exceed another involved market’s limit.
 
 | Calculation | Approved basis |
 | --- | --- |
@@ -549,9 +557,15 @@ Attendance-sheet time/signature fields remain attendance-only; there is no atten
 
 The assessment freezes the business/trade, category, stall location and area, rates, policy references, billing-day rule and reference-period figures. Historic assessments stay intact after master records change. With a calendar-day policy, a different month can produce a different total using the same frozen basis. Advance and deposit calculations are information for review.
 
+For fixed-day assignments, multiply rounded daily base rent by the saved interval to get the payable amount. Any recorded daily CUSA is multiplied by the same interval and displayed for reference. Fixed-day assessments do not assess an initial advance or deposit. Adjust the interval on creation or an eligible renewal. The saved original term and its bills retain their coverage and amounts.
+
 ![Assignment form](screenshots/stalls/27-assignment-form.png)
 
-Figure 27. Stall assignment form for an existing tenant.
+Figure 27. Stall assignment form for an existing tenant in the monthly training example.
+
+![Stall assignment form with seven billing days and daily CUSA](screenshots/stalls/67-fixed-day-assignment.png)
+
+Figure 67. Fictional assignment form showing a seven-day interval and PHP 10.00 daily CUSA for records.
 
 ![Assignment workflow](workflows/04-stall-assignment.png)
 
@@ -576,7 +590,7 @@ Figure 14. Template registry; the training screen does not grant legal or policy
 ### 7.3 Create and calculate a lease draft
 
 1. Open **Management → Lease Contracts** and select the create-draft action. You can also select **Prepare lease contract** from the active tenant’s **Lease Contracts** tab to show only assignments for that tenant.
-2. Select an active assessed assignment and an approved template version. For a legacy assignment, complete an authorized same-stall renewal with an eligible business, category and policy before creating a new assessed contract.
+2. Select an active monthly assessed assignment and an approved template version. For a legacy assignment, use an authorized monthly renewal with an eligible business, category and policy before creating a new assessed contract. Fixed-day assignments need a separately approved compatible contract workflow.
 3. Enter effectivity, expiration and execution dates. Contract dates must fall within the assignment.
 4. Select **Save draft**. Review the permitted goods, location, area, applied rate, billing days, base rent, CUSA and initial advance/deposit breakdown. The effectivity month is the contract’s reference billing period.
 
@@ -633,10 +647,10 @@ Figure 66. The termination confirmation names the selected action. This fictiona
 1. Review existing bills and dates before changing occupancy.
 2. For ending, open **Stall Assignments**, enter an eligible end date no later than today and a reason of at least five characters.
 3. For transfer/renewal, open **Transfer / renew** and choose the destination stall, using the same stall for renewal. Choose the tenant’s eligible business, enter a unique new agreement reference and new start/end dates, and supply any required concurrent-occupancy authority. The new term takes a fresh assessment.
-4. New transfer/renewal starts must be the first day of a month, after the original start and no later than today. The previous assignment ends on the preceding day.
+4. Choose a start after the original start and no later than today. For an original monthly assignment, use the first day of a month. For an original fixed-day assignment, choose a date aligned to the original assignment start and saved period length. If MIS has disabled fixed-day entry and the renewal will be monthly, the date must also be the first day of a month. The previous assignment ends on the preceding day. If fixed-day entry is available, review the interval and record-only CUSA for the new term.
 5. Confirm that old history remains and the new agreement is separate. Prepare any new legal contract through its own reviewed workflow.
 
-**Expected response:** ending sets the stall vacant and retains assignment/agreement history. Transfer/renewal records separate history; same-stall renewal ends then reassigns transactionally. **Validation:** later bills must be resolved before ending. A bill for the end month blocks a midmonth end: **“A bill covers the full month. End at the month boundary; partial-month corrections require approved policy.”** **Common mistakes:** trying to schedule a future renewal in a workflow restricted to today/past, ending an assignment solely to escape a balance, or assuming bills disappear when occupancy ends.
+**Expected response:** ending sets the stall vacant and retains assignment/agreement history. Transfer/renewal records separate history. A same-stall renewal ends and reassigns occupancy in one transaction. **Validation:** a saved bill's complete coverage must fit within the assignment. A full-month bill blocks a midmonth end when it covers a later date. An existing fixed-day bill protects its inclusive coverage in the same way. **Common mistake:** assuming bills disappear when occupancy ends.
 
 ![Transfer or renewal form](screenshots/contracts/39-renew-transfer.png)
 
@@ -656,7 +670,7 @@ Figure W07. Separate contract closure, assignment ending and renewal/transfer co
 
 ### 7.7 Request, review and return to automatic rent
 
-Open **Tenant Management → tenant → Rental Information**. Pick a **Reference month** for the assignment. **Automatic** is the default and uses the frozen initial assessed category, location, floor area and rental policy basis. Select **Manual override request → Continue** to propose new terms for that assignment. Use **Override history** to review requests and decisions.
+For a monthly assignment, open **Tenant Management → tenant → Rental Information**. Pick a **Reference month** for the assignment. **Automatic** is the default and uses the frozen initial assessed category, location, floor area and rental policy basis. Select **Manual override request → Continue** to propose new terms for that assignment. Use **Override history** to review requests and decisions. This override workflow applies to monthly assignments.
 
 1. Choose **Rate per square meter** or **Direct daily amount**. The first is multiplied by the frozen floor area. The second is already a daily total. Enter only the amount for the selected method.
 2. Choose prospective full billing months within the assignment. Start on the first day of a month and end on the last day of a month. An open end requires an open-ended assignment and policy. Enter a reason and the supporting reference where required.
@@ -699,23 +713,37 @@ Figure 59. January automatic rental after prospective revocation in isolated fic
 
 ## Chapter 8 — Rental and Payment Monitoring
 
-### 8.1 Generate and post monthly bills
+### 8.1 Generate and post rental bills
 
 1. Open **Transactions → Rental Billing** and choose the draft-generation action with `billing.generate`.
-2. Enter billing month (`YYYY-MM`), approved due date and select eligible assignments, up to 500 per request.
+2. For monthly assignments choose **Monthly** and enter the billing month (`YYYY-MM`). For fixed-day assignments choose **Fixed-day** and enter **Fixed-day period start** (`YYYY-MM-DD`). Enter **Approved due date** and select eligible active assignments of that cycle, up to 500 per request.
 3. Select **Generate drafts for review**.
-4. Open each draft and check the tenant, stall, period and due date. An assessed agreement uses its frozen rate, area and CUSA. Verify the separate base rent and CUSA lines using the billing month’s day count under the frozen rule. Legacy agreements continue to use the saved monthly amount.
+4. Open each draft and check the tenant, stall, period and due date. On an assessed monthly bill, verify base rent and CUSA under its frozen rule. Legacy agreements use their saved monthly amount. A fixed-day bill displays the inclusive coverage range and base rent payable. The recorded CUSA amount appears for reference separately from the charges.
 5. With `billing.post`, select the posting action only after review.
 
-**Expected response:** generation states that draft bills are ready and **nothing was posted**; posting displays **“Bill posted.”** One bill per assignment/period is retained on repeat generation. Drafts do not affect ledger balances. **Validation:** future billing is disabled; earlier-month billing additionally needs `financial.backdate`; due date cannot precede the month. The assignment must cover the full month; partial-month proration is rejected. **Common mistake:** interpreting draft generation or a scheduled draft run as automatic posting. The scheduler never establishes an LGU policy or posts bills automatically.
+**Expected response:** generation states that draft bills are ready and **nothing was posted**. Posting displays **“Bill posted.”** Repeating generation returns the saved bill for the same assignment and period. Drafts affect the ledger only after posting. **Validation:** the due date must be on or after the period start. Future starts are unavailable. Earlier monthly periods and fixed-day starts before today require `financial.backdate`. Generation rejects mixed billing cycles, misaligned intervals and periods that extend beyond the assignment. **Common mistake:** interpreting generation as posting. The scheduler only creates eligible monthly drafts.
+
+**Find an interval start.** Start at the assignment start date and advance by its saved day count. For a seven-day assignment starting 27 November, select 27 November for coverage through 3 December. Select 4 December for coverage through 10 December. Generate each interval separately when eligible. A shorter final fragment cannot be billed through this workflow.
+
+Under the seeded roles, a Market Administrator can generate a fixed-day draft on the interval start. Generating a draft for an earlier fixed-day start requires both billing generation and backdate permissions. The Super Administrator has both under the seeded grants.
+
+On the billing list, use the month filter to find periods beginning in that month. The **Fixed-day period start** filter selects one exact start date and takes precedence when both filters have values.
 
 ![Rental billing list](screenshots/payments/15-billing.png)
 
-Figure 15. Billing list and review workflow.
+Figure 15. Billing list and review workflow in the monthly training example.
 
 ![Bill detail](screenshots/payments/16-bill.png)
 
 Figure 16. Assessed November bill with separate base rent and CUSA, posting state and balance.
+
+![Fixed-day billing form with interval start and due date](screenshots/payments/69-fixed-day-generation.png)
+
+Figure 69. Draft generation for the fictional fixed-day assignment beginning on 1 November.
+
+![Posted fixed-day bill with coverage and recorded CUSA](screenshots/payments/70-fixed-day-bill.png)
+
+Figure 70. Fictional posted bill for 1–7 November. The charge is PHP 1,400.00, and PHP 70.00 CUSA appears for records separately.
 
 ### 8.2 Record, review and post a payment
 
@@ -848,19 +876,19 @@ Figure 22. Tenant Statement of Account for the assessed November bill and partia
 | Vacant Stall Report | Same columns restricted to current vacant status; reserved/maintenance are excluded. | reports.view | M, S, St; no date filter. |
 | Tenant Master List | Tenant reference, name, phone, email, address and status; not a government-ID export. | reports.personal | T; M matches any assignment history in market, not only active; no date filter. |
 | Stall Assignment History | Stall, tenant/reference, agreement, assignment start/end/status, retaining prior occupancy. | reports.personal | M, S, St, T, D by assignment start. |
-| Monthly Rental Billing | Posted bill reference, tenant, stall, period, due date, billed/paid/outstanding. Drafts excluded. | reports.financial + reports.personal | M, S, St, T, D by due date, not bill month. |
+| Rental Billing | Posted bill reference, tenant, stall, period, due date, billed, paid and outstanding. Fixed-day rows include coverage and record-only CUSA. | reports.financial + reports.personal | M, S, St, T, D by bill due date. |
 | Rental Collection Summary | Effective allocated collections grouped by payment month, plus Treasury-confirmed subset. | reports.view | M, S, St, T, O, D by payment date. |
 | Daily Collections | Same effective allocation basis grouped by payment date. | reports.view | M, S, St, T, O, D by payment date. |
 | Collections by Cashier | Effective allocations grouped by recording officer; “cashier” means recorded_by, not necessarily posting officer. | reports.financial | M, S, St, T, O, D by payment date. |
 | Collections by Market / Section | Effective allocations grouped by market and section. | reports.view | M, S, St, T, O, D by payment date. |
-| Outstanding Receivables | Posted bill rows with positive current outstanding balance. | reports.financial + reports.personal | M, S, St, T, D by due date. |
-| Overdue Rental Accounts | Positive posted balances with due date strictly before today. | reports.financial + reports.personal | M, S, St, T, D by due date; overdue cutoff remains today. |
-| Tenant Statement of Account | Posted bill rows for one required tenant; bill-level current totals, not a separate accounting ledger. | reports.personal | T required; M, S, St, D by due date. |
+| Outstanding Receivables | Posted bills with a positive current balance. Fixed-day rows include coverage and record-only CUSA. | reports.financial + reports.personal | M, S, St, T, D by due date. |
+| Overdue Rental Accounts | Positive posted balances with due dates before today. Fixed-day rows include coverage and record-only CUSA. | reports.financial + reports.personal | M, S, St, T, D by due date. |
+| Tenant Statement of Account | Current totals for the selected tenant's posted bills. Fixed-day rows include coverage and record-only CUSA. | reports.personal | T required; M, S, St, D by due date. |
 | Payment Transaction History | Payment reference/date/tenant/amount/method/receipt/officer and derived reversal/reconciliation status; includes drafts/voids unless filtered. | reports.financial + reports.personal | T, O, D by payment date; M/S/St through allocated bills; status supported as request parameter. |
 | Rental Rate History | Market, classification, amount, effective dates, approval reference/status. | rates.view | M, D by effective-from; no tenant/stall filter. |
 | Audit Trail Report | Time, actor, action, entity type/ID and reason. | audit.view | D by created timestamp. |
 | Business Category Report | Categories, associated businesses and active stall counts, Inner/Outer rates, revision status, dates and references. | rates.view | BC, D by rate effective-from date. |
-| Rental Assessment Report | Frozen category, location, area, applied rate, reference period, policy and calculated amounts. | reports.financial | M, S, St, T, BC, L, D by creation time, recorded by date, and saved computation mode with override viewing permission. |
+| Rental Assessment Report | Frozen category, location, area, applied rate, period and calculated amounts. Fixed-day rows include coverage and CUSA treatment. | reports.financial | M, S, St, T, BC, L, D by creation time, recorded by date, and saved computation mode with override viewing permission. |
 | Rental Override Report | Request terms, approval and exception authority, proposed and applicable daily rent, and status at the selected applicability date. | rentals.override.report | M, S, St, T, BC, applicability date, computation mode and request status. Section refers to the frozen assessment. |
 | Lease Contract Registry | Control number, assessed category/location where present, lease dates/status, rental figures and document milestones. | contracts.view | M, S, St, T, BC, L, D by lease effectivity date. |
 
@@ -1151,11 +1179,11 @@ Figure L15. Actual dashboard context; viewer permissions still apply independent
 
 **Responsible:** role with the specific report permission. **Prerequisites:** Elena's actual numeric tenant ID and supported filter basis. **Menu:** Reports → All Reports.
 
-1. Generate the relevant Occupancy, Monthly Billing, Payment History or Tenant Statement report under suitable roles.
+1. Generate the relevant Occupancy, Rental Billing, Payment History or Tenant Statement report under suitable roles.
 2. Use the required tenant ID for the statement. For the assessed November example, check **8,364.00 billed**, **2,000.00 paid** and **6,364.00 outstanding** if these are the only effective transactions.
 3. Preview and export/print only permitted data.
 
-**Input:** supported IDs/dates. **Expected:** posted/effective values according to report type. **Validation:** tenant required, 403 access restriction or 5,000-row limit. **Common mistake:** filtering Monthly Billing by November payment date when it filters bill due date. **Next:** future authorized closure/renewal.
+**Input:** supported IDs/dates. **Expected:** posted or effective values according to report type. **Validation:** tenant required, 403 access restriction or 5,000-row limit. **Common mistake:** entering a payment date for Rental Billing, which filters by bill due date. **Next:** future authorized closure or renewal.
 
 ![Lifecycle report output](screenshots/reports/22-report.png)
 
@@ -1218,6 +1246,12 @@ The officer voided the generated contract before issuance and the original Word 
 
 Figure 62. Unissued training contract generated from manual rent in isolated fictional data.
 
+### 12.3 Separate fixed-day billing exercise
+
+For this exercise, use an authorized fixed-day training installation and a fictional stall with base rent of PHP 200.00 daily. Save an eligible assignment beginning 1 November with the seven-day interval and PHP 10.00 daily CUSA for reference. Each full interval has PHP 1,400.00 base rent payable and PHP 70.00 record-only CUSA.
+
+When the dates are eligible, generate a draft for 1 through 7 November and a separate draft for 8 through 14 November. Check that the bill references and coverage differ and that each bill charges PHP 1,400.00. Open a reviewed draft and post it with the usual permission. A duplicate request for the same assignment and start keeps the original amount and due date. Generate only complete intervals within the term.
+
 ## Chapter 13 — Troubleshooting and Frequently Asked Questions
 
 ### 13.1 Resolve a problem safely
@@ -1254,7 +1288,8 @@ Figure 62. Unissued training contract generated from manual rent in isolated fic
 | Payment does not reduce balance | Check it is posted and unreversed, with allocation to the intended bill. Drafts do not count. |
 | Report is empty / filters seem ignored | Confirm supported filters and date basis in Chapter 10. Shared controls may be irrelevant to that report branch. |
 | Cannot export / print | Check permission, browser download/print settings and 5,000-row limit. Narrow supported filters; report file/integrity failures to MIS. |
-| Future renewal/partial month rejected | These are deliberate current boundaries. Seek authorized policy/product work; do not edit dates to misrepresent events. |
+| Fixed-day bill generation fails | Check the assignment's saved interval, the alignment of the start date, full term coverage, due date and backdate permission. Use one billing cycle per request. |
+| Future renewal or a partial period is rejected | Check the term's saved billing cycle, date rules and existing coverage. Ask the authorized officer about the supported correction workflow. |
 
 ### 13.2 Frequently asked operational questions
 
@@ -1273,6 +1308,8 @@ Figure 62. Unissued training contract generated from manual rent in isolated fic
 **Can I change my own password here?** There is no self-service screen. An authorized account administrator can reset it through Settings → Users and Roles.
 
 **Why can two assessed monthly totals differ?** Both use the frozen terms. Under a calendar policy the contract’s reference month and the bill’s month may have different day counts. Check the period on each record.
+
+**Where do I change the fixed-day interval?** Choose the interval on a new assignment or eligible renewal when fixed-day entry is enabled. The original assignment keeps its saved interval, amount basis and bills.
 
 **Does this manual establish production readiness?** No. Actual deployment, unsupported-stack risks, MySQL locking/UAT and authorized legal/document visual review remain separate acceptance responsibilities.
 

@@ -1,6 +1,6 @@
 <?php
 namespace App\Services;
-use App\Models\{User, Stall, Tenant, Business, Market, StallAssignment, RentalAgreement};
+use App\Models\{User, Stall, Tenant, Business, Market, StallAssignment, RentalAgreement, RentalPolicy};
 use Illuminate\Support\Facades\{DB, Validator};
 use Illuminate\Validation\ValidationException;
 class AssignmentService
@@ -8,7 +8,7 @@ class AssignmentService
     public function assign(User $actor, array $data)
     {
         $this->authorize($actor);
-        $d = Validator::make($data, [
+        $rules = [
             "stall_id" => "required|integer|exists:stalls,id",
             "tenant_id" => "required|integer|exists:tenants,id",
             "business_id" => "required|integer|exists:businesses,id",
@@ -20,7 +20,12 @@ class AssignmentService
             "concurrent_authorization_reference" => "nullable|required_with:concurrent_authorization_reason|string|max:120",
             "concurrent_authorization_reason" => "nullable|required_with:concurrent_authorization_reference|string|min:5|max:1000",
             "helpers" => "nullable|array|max:2",
-        ])->validate();
+        ];
+        if (config('billing.fixed_day_enabled', false)) {
+            $rules += ['billing_interval_days'=>'nullable|integer|between:1,366',
+                'daily_cusa'=>['nullable','regex:/\A[0-9]{1,12}(\.[0-9]{1,2})?\z/']];
+        }
+        $d = Validator::make($data, $rules)->validate();
         return DB::transaction(function () use ($actor, $d) {
             $tenant = Tenant::whereKey($d["tenant_id"])->lockForUpdate()->firstOrFail();
             $stall = Stall::whereKey($d["stall_id"])->lockForUpdate()->firstOrFail();
@@ -41,7 +46,7 @@ class AssignmentService
             $end = $d["end_date"] ?? "9999-12-31";
             $conflict = $this->overlapping($stall->assignments(), $d["start_date"], $end)->lockForUpdate()->exists();
             $this->check(!$conflict, "Assignment dates overlap an existing occupancy.");
-            $this->authorizeConcurrency($tenant, $stall, $d, $end);
+            $d['concurrency_policy'] = $this->authorizeConcurrency($tenant, $stall, $d, $end);
             $assignment = StallAssignment::create([
                 "stall_id" => $stall->id,
                 "tenant_id" => $tenant->id,
@@ -59,7 +64,8 @@ class AssignmentService
                 app(TenantDataService::class)->saveHelpers($actor, $assignment, $d["helpers"]);
             }
             $assessment = app(RentalCalculationService::class)
-                ->assess($actor, $assignment, substr($assignment->start_date, 0, 7));
+                ->assess($actor, $assignment, config('billing.fixed_day_enabled', false)
+                    ? $assignment->start_date : substr($assignment->start_date, 0, 7), 'initial', $d);
             RentalAgreement::create([
                 "stall_assignment_id" => $assignment->id,
                 "rental_assessment_id" => $assessment->id,
@@ -87,7 +93,7 @@ class AssignmentService
         });
     }
 
-    private function authorizeConcurrency(Tenant $tenant, Stall $stall, array $data, $end): void
+    private function authorizeConcurrency(Tenant $tenant, Stall $stall, array $data, $end): ?RentalPolicy
     {
         // The tenant lock serializes concurrency checks. Acquire involved market locks in ascending ID order.
         $other = $this->overlapping(
@@ -103,17 +109,22 @@ class AssignmentService
             'Market and section must be active.',
         );
         if ($other->isEmpty()) {
-            return;
+            return null;
         }
         $this->check(trim($data["concurrent_authorization_reference"] ?? "") !== "" &&
             mb_strlen(trim($data["concurrent_authorization_reason"] ?? "")) >= 5,
             "Supply a reference and reason authorizing the concurrent assignments.");
         $calculation = app(RentalCalculationService::class);
+        $assignmentPolicy = null;
         foreach ($markets->sort() as $marketId) {
             $policy = $calculation->marketPolicy($marketId, $data["start_date"]);
             $this->check($policy->max_concurrent_assignments >= $other->count() + 1,
                 "Every involved market's approved policy must permit the tenant's total concurrent assignments.");
+            if ((int) $marketId === (int) $stall->market_id) {
+                $assignmentPolicy = $policy;
+            }
         }
+        return $assignmentPolicy;
     }
     public function end(User $actor, StallAssignment $assignment, $date, $reason)
     {
@@ -135,11 +146,11 @@ class AssignmentService
                     (!$a->end_date || $date <= $a->end_date),
                 "Assignment is ended or end date is outside its term.",
             );
-            $this->check(
-                !$a->bills()->where("period", ">", substr($date, 0, 7))->exists(),
-                "Later bills exist. Resolve billing before ending this assignment.",
-            );
-            if ($date < \Carbon\Carbon::parse($date)->endOfMonth()->toDateString()) {
+            $fixed = optional(optional($a->agreement)->assessment)->isFixedDays();
+            $this->check($fixed ? !$a->bills()->where('coverage_end', '>', $date)->exists()
+                : !$a->bills()->where("period", ">", substr($date, 0, 7))->exists(),
+                "Later bills exist. Resolve billing before ending this assignment.");
+            if (!$fixed && $date < \Carbon\Carbon::parse($date)->endOfMonth()->toDateString()) {
                 $this->check(
                     !$a->bills()->where("period", substr($date, 0, 7))->exists(),
                     "A bill covers the full month. End at the month boundary; partial-month corrections require approved policy.",
@@ -163,10 +174,20 @@ class AssignmentService
             "start_date" => "required|date_format:Y-m-d|before_or_equal:today",
             "reason" => "required|string|min:5|max:1000",
         ])->validate();
-        $this->check(
-            substr($data["start_date"], 8) === "01",
-            "Transfers start on a month boundary until proration policy is approved.",
-        );
+        $initial = optional($assignment->agreement)->assessment;
+        if ($initial && $initial->isFixedDays()) {
+            $days = (int) $initial->basis['fixed_billing_days'];
+            $offset = \Carbon\Carbon::parse($assignment->start_date)->diffInDays(\Carbon\Carbon::parse($data['start_date']), false);
+            $this->check($days > 0 && $offset > 0 && $offset % $days === 0,
+                'Renew or transfer on a fixed-day interval boundary.');
+            if (!config('billing.fixed_day_enabled', false)) {
+                $this->check(substr($data['start_date'], 8) === '01',
+                    'The new monthly agreement must also start on the first day of a month.');
+            }
+        } else {
+            $this->check(substr($data["start_date"], 8) === "01",
+                "Transfers start on a month boundary until proration policy is approved.");
+        }
         $this->check(
             $data["start_date"] > $assignment->start_date,
             "Transfer must follow the original start date.",

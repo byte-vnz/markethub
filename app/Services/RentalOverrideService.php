@@ -35,6 +35,7 @@ class RentalOverrideService
             $initial = optional($a->agreement()->lockForUpdate()->first())->assessment;
             $this->check($initial && $initial->purpose === 'initial' && (int) $initial->stall_assignment_id === (int) $a->id,
                 'assessment', 'Renew this legacy assignment before requesting a daily rental override.');
+            $this->check(!$initial->isFixedDays(), 'assessment', 'Monthly rental overrides are unavailable for fixed-day agreements.');
             // Policy approvals and retirement also take this market lock before inspecting dependent requests.
             Market::whereKey($initial->market_id)->lockForUpdate()->firstOrFail();
             return $operation($a, $initial);

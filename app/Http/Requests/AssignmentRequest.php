@@ -20,8 +20,18 @@ class AssignmentRequest extends FormRequest
             "concurrent_authorization_reference" => "nullable|required_with:concurrent_authorization_reason|string|max:120",
             "concurrent_authorization_reason" => "nullable|required_with:concurrent_authorization_reference|string|min:5|max:1000",
         ];
-        return $rules + ($this->routeIs("assignments.transfer")
+        return $rules + self::billingTermsRules() + ($this->routeIs("assignments.transfer")
             ? ["reason" => "required|string|min:5|max:1000"]
             : ["tenant_id" => "required|integer|exists:tenants,id"]);
+    }
+
+    public static function billingTermsRules(string $prefix = ''): array
+    {
+        $enabled = config('billing.fixed_day_enabled');
+
+        return [
+            $prefix.'billing_interval_days' => $enabled ? 'nullable|integer|between:1,366' : 'prohibited',
+            $prefix.'daily_cusa' => $enabled ? 'nullable|regex:/\A[0-9]{1,12}(?:\.[0-9]{1,2})?\z/' : 'prohibited',
+        ];
     }
 }

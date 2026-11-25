@@ -70,7 +70,8 @@ class TenantRequest extends FormRequest
         foreach (BusinessRequest::fields(true) as $field => $rule) {
             $rules['businesses.*.'.$field] = $rule;
         }
-        return $rules + self::helperRules('helpers') + self::helperRules('pending_assignments.*.helpers');
+        return $rules + AssignmentRequest::billingTermsRules('pending_assignments.*.')
+            + self::helperRules('helpers') + self::helperRules('pending_assignments.*.helpers');
     }
 
     public static function helperRules(string $key): array
