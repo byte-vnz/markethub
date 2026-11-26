@@ -188,7 +188,8 @@ class RentalAssessmentTest extends TestCase
         $assignment->agreement->assessment->update(["daily_cusa" => "0.00"]);
     }
 
-    public function test_concurrent_assignment_checks_both_markets_and_concurrent_authorization()
+    /** @dataProvider concurrentReferences */
+    public function test_concurrent_assignment_checks_both_markets_and_concurrent_authorization($reference)
     {
         $first = $this->stall("M1", "inner", ["max_concurrent_assignments" => 1]);
         $other = $this->stall("M2", "outer", ["max_concurrent_assignments" => 2]);
@@ -196,7 +197,7 @@ class RentalAssessmentTest extends TestCase
         $service = app(AssignmentService::class);
         $service->assign($this->actor, $this->assignmentData($first, $business, "FIRST"));
         $second = $this->assignmentData($other, $business, "SECOND") + [
-            "concurrent_authorization_reference" => "TEST-REVIEW", "concurrent_authorization_reason" => "Fictional authorization",
+            "concurrent_authorization_reference" => $reference, "concurrent_authorization_reason" => "Fictional authorization",
         ];
         try {
             $service->assign($this->actor, $second);
@@ -206,8 +207,19 @@ class RentalAssessmentTest extends TestCase
         }
         $this->assertDatabaseCount("stall_assignments", 1);
         RentalPolicy::where("market_id", $first->market_id)->update(["max_concurrent_assignments" => 2]);
+        try {
+            $service->assign($this->actor, array_replace($second, ['concurrent_authorization_reference'=>null, 'concurrent_authorization_reason'=>null]));
+            $this->fail('Concurrent occupancy without a reason was accepted.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('assignment', $exception->errors());
+        }
         $result = $service->assign($this->actor, $second);
-        $this->assertSame("TEST-REVIEW", $result->concurrent_authorization_reference);
+        $this->assertSame($reference, $result->concurrent_authorization_reference);
         $this->assertSame("268.80", $result->agreement->assessment->daily_rental);
+    }
+
+    public function concurrentReferences(): array
+    {
+        return [['TEST-REVIEW'], [null]];
     }
 }

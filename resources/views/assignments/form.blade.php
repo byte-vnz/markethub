@@ -51,8 +51,9 @@
         </div>
         @include('assignments.billing-terms')
         <div>
-            <label for="reference">Agreement reference</label>
-            <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" required>
+            <label for="reference">Agreement reference (optional)</label>
+            <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" aria-describedby="reference-hint">
+            <p id="reference-hint" class="text-sm text-slate-600 mt-1">Leave blank to generate an internal agreement reference.</p>
         </div>
         <div>
             <label for="remarks">Remarks</label>

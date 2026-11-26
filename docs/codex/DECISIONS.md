@@ -66,3 +66,12 @@ The production screenshot identified PHP 8-only parenthesized dynamic class cons
 Default-disable fixed-day assignment creation until an authorized forward migration and rollout. Freeze the chosen interval on new assessments and use aligned date keys and inclusive coverage for independently billable periods. Preserve existing monthly keys and snapshots. A nullable market-policy association supports the ordinary fixed-day path with an approved category rate. The concurrent-occupancy gate still checks effective policies and retains the new assignment market's authorizing policy in the assessment. Record daily and period CUSA without charging it on fixed-day bills.
 
 Retain existing generation, posting, backdate and ledger permissions. Require full fixed-day intervals and protect saved coverage during assignment ending or renewal. Monthly contract and rental override workflows require separately approved fixed-day compatibility. Changes to the feature switch govern new terms. Previously saved fixed-day terms keep their billing and history behavior. See [approved design](../superpowers/specs/2026-11-25-fixed-day-billing-design.md).
+
+## Optional assignment information — 2026-11-26
+Keep every agreement's stored reference unique and populated. Generate an internal `RA-` reference at creation when staff leave the input blank. Accept an eligible business without a goods or services description for monthly and fixed-day assignment. Continue requiring the approved category rate, verified stall and tenant ownership. Preserve the reason and approved-policy checks for concurrent occupancy. Store its optional authorization reference only when supplied. Keep the original lease draft and legal document checks on the frozen business and rental basis.
+
+An orphan-business reassociation requires its target tenant identifier because it selects the verified owner. Financial and legal records use the reference requirements of their corresponding workflows.
+
+## v04 lease source integration — 2026-11-26
+
+Use separate checksum-pinned v02 and v04 paragraph maps. New contract drafts require a v04 template; existing v02 generated originals and legacy rendering remain. Preserve the v04 source text and structure. Render Outer as the recorded application classification without treating it as Corner. Keep the approval and issuance gates until authorized staff resolve the invalid source sample date, Inner/Corner terminology and CUSA/weekly collection language.

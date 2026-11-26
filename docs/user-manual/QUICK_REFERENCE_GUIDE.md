@@ -2,7 +2,7 @@
 
 Market Stall Management and Monitoring System  
 City Government of San Pedro, Laguna  
-Version 1.4 | Updated 26 November 2026 | Prepared for LGU review
+Version 1.5 | Updated 26 November 2026 | Prepared for LGU review
 
 ## Start and finish safely
 
@@ -46,8 +46,8 @@ Role grants do not override record-state checks, approval requirements or LGU au
 
 1. Search **Management → Tenant Management** by name, business, stall or account number before creating a record.
 2. In **Register tenant**, complete **Personal**, **Identification**, **Businesses**, **Stall selections**, **Rental preview**, **Helpers** and **Review**. Preserve leading zeroes in account numbers and use verified identity/ID details.
-3. Add the business and active category under the tenant. Record verified permitted goods or services of 1–180 characters before a new assessment. Open the tenant’s **Businesses** tab to maintain records after registration.
-4. Select each eligible stall and linked business. Supply assignment dates and agreement reference. Additional occupancy requires an authorization reference and reason, plus approval of the total concurrent count under every involved market’s effective policy.
+3. Add the business and active category under the tenant. Enter verified permitted goods or services, permit details and registration details if available. The tenant reference is generated if left blank.
+4. Select each eligible stall and linked business. Enter the assignment dates. Leave the agreement reference blank to use a generated internal reference. Additional occupancy still needs a reason and policy approval for the total count in every involved market. The authorization reference is optional.
 5. Review the preview. Inner uses the approved category minimum and Outer the maximum. The server multiplies the daily rate by verified area. If fixed-day entry is available, choose 1 to 366 days and check the period base rent and recorded CUSA. Seven days is the installation default unless MIS configures a different value. An ordinary fixed-day assignment needs an approved category rate. Concurrent occupancy still requires the usual policy approval.
 6. Add up to two helpers per assignment. **Save draft** keeps pending selections without reserving a stall. An authorized officer selects **Confirm registration** after the eligibility checks. For an existing tenant, **Stall Assignments → Assign a tenant** also uses the approved assessment basis.
 7. Review the saved assignment, **Rental Information** and authorized helper records. Check occupied status on the map.
@@ -61,8 +61,8 @@ Role grants do not override record-state checks, approval requirements or LGU au
 
 ## Generate and retain a lease contract
 
-1. In **Management → Lease Contracts**, create a draft using an active assessed assignment, approved effective template and valid lease dates. A legacy assignment requires an authorized renewal before a new assessed contract.
-2. Review the frozen business and rental basis of the monthly assignment. The effectivity month determines billing days under the frozen policy. Fixed-day assignments need a separately approved compatible contract workflow.
+1. In **Management → Lease Contracts**, create a draft using an active assessed assignment, the approved v04 template and valid lease dates. An authorized template manager must register and visually review the private v04 working copy first. A legacy assignment requires an authorized renewal before a new assessed contract.
+2. Review the frozen business and rental basis of the monthly assignment. A lease draft needs 1–180 characters of verified goods or services in the assessment. If these are missing, complete the business details and use an eligible renewal. Fixed-day assignments need a separately approved compatible contract workflow.
 3. Verify current tenant identity, ID and authorized assignment helpers before **Generate DOCX**. That first generation captures them while preserving the assessed trade and rental details.
 4. Compare the preserved original against the authoritative source in an approved document application. A PDF is available if configured local conversion succeeds.
 5. An authorized reviewer records actual visual review. Issuance also requires approved numbering and rental-policy references and advance/deposit authorization. Upload the executed signed copy before separate activation.
@@ -85,7 +85,7 @@ In the fictional November example, an Outer Vegetables stall of 10 sq. m. uses P
 1. Open **Reports → All Reports**, choose a permitted report and apply only filters supported by that report.
 2. Review on-screen records before CSV, Excel, PDF or **Print view**. Exports reject more than 5,000 rows; narrow filters rather than assume truncation.
 3. Tenant statements need a tenant ID. Use **Business Category Report**, **Rental Assessment Report** or **Lease Contract Registry** for category revisions, assessed terms or contract milestones within your permissions.
-4. For renewal use **Transfer / renew**, select the same stall, an active linked business and a unique agreement reference. Use an eligible month boundary for an original monthly term or an aligned period boundary for an original fixed-day term. If the renewal switches from fixed-day to monthly, choose an aligned start on the first of a month. Review the new assessment.
+4. For renewal, use **Transfer / renew** and select the same stall and an active linked business. Leave the agreement reference blank to generate it. Use a month boundary for an original monthly term or an aligned boundary for an original fixed-day term. A switch from fixed-day to monthly needs both. Review the new assessment.
 5. For contract closure, enter the required reason and check that the dialog names **Terminate contract** or **Void contract**, as intended. Contract closure and occupancy ending are separate. Refer a blocked midmonth ending to the authorized office.
 6. Preserve audit/history. Secure prints/downloads and sign out.
 

@@ -194,7 +194,10 @@ class UnifiedTenantRegistrationTest extends TestCase
         $this->approveRates($category, $first->market);
         $choices = $this->choices($category, $first);
         $choices['businesses']['other'] = ['business_category_id'=>$category->id,'name'=>'Other fictional trade','permitted_goods'=>'Fictional second trade goods','status'=>'active'];
-        $choices['pending_assignments'][] = ['business_key'=>'other','stall_id'=>$second->id,'start_date'=>today()->startOfMonth()->toDateString(),'concurrent_authorization_reference'=>'AUTH-DEMO','concurrent_authorization_reason'=>'Fictional authorized second stall'];
+        $choices['businesses']['fruit']['permitted_goods'] = '';
+        $choices['businesses']['fruit']['permit_reference'] = '';
+        $choices['businesses']['fruit']['registration_reference'] = '';
+        $choices['pending_assignments'][] = ['business_key'=>'other','stall_id'=>$second->id,'start_date'=>today()->startOfMonth()->toDateString(),'concurrent_authorization_reason'=>'Fictional authorized second stall'];
         $form = $this->profile(['registration_action'=>'confirm']) + $choices;
         $this->from('/manage/tenants/create')->post('/manage/tenants', $form)->assertRedirect('/manage/tenants/create')->assertSessionHasErrors();
         $this->assertSame(0, Tenant::count());
@@ -208,6 +211,8 @@ class UnifiedTenantRegistrationTest extends TestCase
         $this->assertSame(1, Tenant::count());
         $this->assertSame(2, Business::count());
         $this->assertSame(2, RentalAgreement::count());
+        $this->assertSame(2, RentalAgreement::distinct()->count('reference'));
+        $this->assertNull(StallAssignment::where('stall_id',$second->id)->sole()->concurrent_authorization_reference);
         $this->assertSame(2, RentalAssessment::count());
         $this->assertSame(1, TenantHelper::count());
         $this->assertSame(0, LeaseContract::count());

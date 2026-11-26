@@ -1,6 +1,6 @@
 # Documentation coverage and verification matrix
 
-Version 1.4, 26 November 2026. Captures use isolated fictional data. The Screenshot Index identifies individual captures and the source cross-check records the permission, report and figure checks. See VERIFICATION.md for test and publication results.
+Version 1.5, 26 November 2026. Captures use isolated fictional data. The Screenshot Index identifies individual captures and the source cross-check records the permission, report and figure checks. See VERIFICATION.md for test and publication results.
 
 | Implemented module or workflow | Manual chapter | Screenshot reference | Evidence and limits |
 | --- | --- | --- | --- |
@@ -19,7 +19,7 @@ Version 1.4, 26 November 2026. Captures use isolated fictional data. The Screens
 | Tenant profile, search and nested businesses | 6 | 06-list, 51-profile-tabs, 52-business-tab | Browser shows the saved training tenant, profile tabs and linked business. Search, ownership and access rules were checked against source. |
 | Helpers and ID privacy | 6, 7, 14 | 49-unified-registration, 51-profile-tabs | Training helper retained through registration. Source and tests cover the two-helper limit, assignment ownership and ID masking/encryption. |
 | Assignment, renewal or ending | 7, 12 | 27-assignment-form, 39-renew-transfer, 41-billed-end-validation | Browser confirmed assessed occupancy and older evidence shows blocked midmonth ending. Source covers fresh assessments on renewal and global concurrency authority. |
-| Contract template, draft and original generation | 7, 12 | 11-draft-form, 12-draft, 13-ready, 14-templates, 29-generation-confirmation | Source requires an active assessed assignment for a new draft. First generation takes current verified tenant identity and authorized helpers with frozen commercial terms. Browser evidence includes a generated training original. |
+| Contract template, draft and original generation | 7, 12 | 11-draft-form, 12-draft, 13-ready, 14-templates, 29-generation-confirmation | New drafts select approved v04 working copies. First generation takes current verified tenant identity and authorized helpers with frozen commercial terms. A synthetic v04 DOCX package passed structural comparison; Word visual review and approval remain pending. Earlier captures illustrate the workflow but do not establish v04 screen fidelity. |
 | Contract visual review, issuance and closure | 7, 12 | 13-ready, 40-void-history | Earlier training void preserved the original and occupancy. The confirmation names the chosen void or termination action. Source and tests cover review, issue, signed upload, activation and expiration controls. Official review and issuance remain pending. |
 | Monthly billing drafts and posting | 8, 12 | 15-billing, 16-bill, 30-billing-run, 31-bill-posted | Earlier isolated browser exercise generated a draft and explicitly posted PHP 8,364.00 for the assessed November period, with PHP 8,064.00 base rent and PHP 300.00 CUSA. |
 | Payment draft, posting and balance | 8, 9, 12 | 17-payment-form, 18-payment-draft, 19-payment-posted, 20-receivables, 32-post-confirmation, 33-balance-after-payment | Browser recorded, reviewed and posted a PHP 2,000.00 allocation. Assessed bill showed Partially paid and PHP 6,364.00 remaining. Payment was pending Treasury reconciliation. |
@@ -34,6 +34,9 @@ Version 1.4, 26 November 2026. Captures use isolated fictional data. The Screens
 | Rental Override Report | 10 | 60 | December manual and January automatic applicability observed. Export filters are covered by isolated tests. |
 | Fixed-day assignment, renewal and preview | 4, 6, 7, 12 | 67, 68 | The fictional browser fixture saved a default seven-day assignment without a market policy and previewed a custom nine-day assignment with PHP 90.00 record-only CUSA. Renewal boundaries are covered by disposable automated tests. |
 | Fixed-day bill generation and posting | 8, 10, 12, 13 | 69, 70 | The browser created two distinct intervals within November. It posted 1–7 November at PHP 1,400.00 and left 8–14 November as a draft. The first bill shows PHP 70.00 record-only CUSA. |
+| Optional assignment information | 6, 7, 12, 13 | 71–73 | Fictional browser verification saved a business with blank goods, permit and registration references. It then assigned and renewed the stall with distinct generated agreement references. The unified registration fixture also confirmed an assignment with optional fields blank. |
+
+Authorized orphan-business reassociation requires the target tenant identifier. Financial and legal processes require the reference values specified in their respective instructions.
 
 ## Report coverage
 

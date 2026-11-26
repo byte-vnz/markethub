@@ -127,3 +127,16 @@ Verification: the strengthened checker rejected the original controller/request 
 The fixed-day billing path is implemented and verified on disposable data. The configuration defaults to disabled and suggests seven days when enabled. The forward migration stores coverage dates, wider period keys and optional market-policy links. Historical monthly paths remain available. The final disposable SQLite suite passed 277 tests and 2,230 assertions on PHP 8.2.12. See [the manual verification record](../user-manual/VERIFICATION.md) for documentation checks.
 
 Native PHP 7.4, representative MySQL migration and locking rehearsal, and authorized operator activation remain pending. Follow [the rollout runbook](../operations/FIXED_DAY_BILLING.md).
+
+## Optional assignment information — 2026-11-26
+Assignment and renewal accept a blank agreement reference and save a generated internal identifier. Permitted goods or services may be blank for assignment. Tenant reference and business permit or registration reference entry remain optional. Concurrent occupancy still requires its reason and effective policy approval. The monthly lease draft still checks verified goods or services against the saved assessment. The change uses the existing schema.
+
+Chrome 152 covered the fictional business form, standalone assignment, renewal and unified registration. It recorded 12 viewport checks and no console errors or unexpected HTTP responses. See [the verification record](../user-manual/VERIFICATION.md).
+
+Version 1.5 of the Help manual package includes the three fictional screenshots and rebuilt PDF, DOCX and quick reference. Actual Help downloads and screenshots passed a separate in-memory check with 43 assertions.
+
+The final application suite passed 284 tests and 2,270 assertions on PHP 8.2.12 with forced in-memory SQLite. The best-effort compatibility scan checked 323 PHP files without errors. Target PHP 7.4 runtime and native MySQL verification remain pending.
+
+## v04 lease source integration — 2026-11-26
+
+Source integration now selects v04 for new contract drafts and private working-copy registration. v02 remains supported for existing prepared documents. The template has 221 paragraphs, 5 tables and 24 legal sections; a synthetic v04 sample and package comparison are under `.qa/v04/`. The original source is unchanged. An actual nine-page Word rendering and office legal review are pending; no v04 template has been approved in the live database.

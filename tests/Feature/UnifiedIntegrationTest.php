@@ -167,26 +167,60 @@ class UnifiedIntegrationTest extends TestCase
         $this->assertSame($before,$assessment->fresh()->getRawOriginal());
     }
 
-    public function test_assignment_confirmation_requires_template_compatible_goods_and_preserves_business_drafts()
+    /** @dataProvider optionalAssignmentFields */
+    public function test_assignment_accepts_optional_goods_and_reference($goods, $reference, $fixed)
     {
+        config(['billing.fixed_day_enabled'=>$fixed]);
         list($user,$market,$section) = $this->fixtures();
         $stall = Stall::create($this->stallData($market,$section)+['location_type'=>'inner']);
         $tenant = Tenant::create(['reference'=>'GOODS','name'=>'Synthetic goods tenant','status'=>'active']);
         $business = $this->businessWithApprovedRental($user,$tenant,$market->id);
-        $data = ['tenant_id'=>$tenant->id,'business_id'=>$business->id,'stall_id'=>$stall->id,'start_date'=>today()->startOfMonth()->toDateString(),'agreement_reference'=>'GOODS-AG'];
-        foreach (['',str_repeat('x',181)] as $goods) {
-            $business->update(['permitted_goods'=>$goods]);
-            try {
-                app(\App\Services\AssignmentService::class)->assign($user,$data);
-                $this->fail('Incompatible goods cannot be frozen into a new agreement.');
-            } catch (\Illuminate\Validation\ValidationException $exception) {
-                $this->assertArrayHasKey('business_id',$exception->errors());
-            }
-            $this->assertSame(0,StallAssignment::count());
-            $this->assertSame($goods,(string)$business->fresh()->permitted_goods);
+        $business->update(['permitted_goods'=>$goods]);
+        $data = ['tenant_id'=>$tenant->id,'business_id'=>$business->id,'stall_id'=>$stall->id,'start_date'=>today()->startOfMonth()->toDateString(),'agreement_reference'=>$reference];
+        $this->post(route('assignments.store'),$data)->assertSessionHasNoErrors()->assertRedirect();
+        $assignment = StallAssignment::sole();
+        $this->assertSame((string)$goods,(string)$business->fresh()->permitted_goods);
+        $this->assertSame((string)$goods,(string)$assignment->agreement->assessment->snapshot['business']['permitted_goods']);
+        if (trim((string)$reference) === '') {
+            $this->assertMatchesRegularExpression('/^RA-[0-9a-f-]{36}$/',$assignment->agreement->reference);
+        } else {
+            $this->assertSame($reference,$assignment->agreement->reference);
         }
-        $business->update(['permitted_goods'=>'Verified synthetic vegetables']);
-        $assignment = app(\App\Services\AssignmentService::class)->assign($user,$data);
-        $this->assertSame('Verified synthetic vegetables',$assignment->agreement->assessment->snapshot['business']['permitted_goods']);
+    }
+
+    public function optionalAssignmentFields(): array
+    {
+        return [
+            'monthly blank'=>[null,null,false],
+            'weekly blank'=>['','',true],
+            'whitespace'=>['','   ',false],
+            'long goods'=>[str_repeat('x',181),'SUPPLIED',false],
+            'zero reference'=>['','0',true],
+        ];
+    }
+
+    public function test_blank_renewal_reference_gets_a_new_id_and_duplicate_supplied_reference_is_rejected()
+    {
+        $this->travelTo(now()->setDate(2026,11,26));
+        list($user,$market,$section) = $this->fixtures();
+        $stall = Stall::create($this->stallData($market,$section)+['location_type'=>'inner']);
+        $tenant = Tenant::create(['reference'=>'RENEW','name'=>'Synthetic renewal tenant','status'=>'active']);
+        $business = $this->businessWithApprovedRental($user,$tenant,$market->id);
+        $business->update(['permitted_goods'=>null]);
+        $data = ['tenant_id'=>$tenant->id,'business_id'=>$business->id,'stall_id'=>$stall->id,'start_date'=>'2026-10-01'];
+        $original = app(\App\Services\AssignmentService::class)->assign($user,$data + ['agreement_reference'=>'   ']);
+        $originalReference = $original->agreement->reference;
+        $snapshot = $original->agreement->assessment->getRawOriginal();
+        $renewal = array_replace($data, ['start_date'=>'2026-11-01','reason'=>'Fictional renewal','agreement_reference'=>$originalReference]);
+        $this->post(route('assignments.transfer',$original),$renewal)->assertSessionHasErrors('agreement_reference');
+        $this->assertSame('active',$original->fresh()->status);
+        $this->assertSame(1,StallAssignment::count());
+        unset($renewal['agreement_reference']);
+        $this->post(route('assignments.transfer',$original),$renewal)->assertSessionHasNoErrors()->assertRedirect();
+        $new = StallAssignment::where('id','!=',$original->id)->sole();
+        $this->assertNotSame($originalReference,$new->agreement->reference);
+        $this->assertMatchesRegularExpression('/^RA-[0-9a-f-]{36}$/',$new->agreement->reference);
+        $this->assertSame($originalReference,$original->agreement->fresh()->reference);
+        $this->assertSame($snapshot,$original->agreement->assessment->fresh()->getRawOriginal());
     }
 }

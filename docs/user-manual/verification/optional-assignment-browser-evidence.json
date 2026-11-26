@@ -1,0 +1,157 @@
+{
+  "browser": "Chrome/152.0.7977.83",
+  "screens": [
+    "tenants/72-optional-business-details.png",
+    "stalls/71-optional-agreement-reference.png",
+    "contracts/73-optional-renewal-reference.png"
+  ],
+  "checks": {
+    "viewports": [
+      {
+        "page": "business",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflowingInputs": []
+      },
+      {
+        "page": "business",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflowingInputs": []
+      },
+      {
+        "page": "business",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflowingInputs": []
+      },
+      {
+        "page": "business",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflowingInputs": []
+      },
+      {
+        "page": "assignment",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflowingInputs": []
+      },
+      {
+        "page": "assignment",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflowingInputs": []
+      },
+      {
+        "page": "assignment",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflowingInputs": []
+      },
+      {
+        "page": "assignment",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflowingInputs": []
+      },
+      {
+        "page": "renewal",
+        "viewport": 320,
+        "documentWidth": 305,
+        "overflowingInputs": []
+      },
+      {
+        "page": "renewal",
+        "viewport": 375,
+        "documentWidth": 360,
+        "overflowingInputs": []
+      },
+      {
+        "page": "renewal",
+        "viewport": 768,
+        "documentWidth": 753,
+        "overflowingInputs": []
+      },
+      {
+        "page": "renewal",
+        "viewport": 1440,
+        "documentWidth": 1425,
+        "overflowingInputs": []
+      }
+    ],
+    "business": {
+      "nativeOptional": [
+        {
+          "name": "permitted_goods",
+          "required": false,
+          "empty": true,
+          "label": "Permitted goods or services (optional)"
+        },
+        {
+          "name": "permit_reference",
+          "required": false,
+          "empty": true,
+          "label": "Permit reference (optional)"
+        },
+        {
+          "name": "registration_reference",
+          "required": false,
+          "empty": true,
+          "label": "Registration reference (optional)"
+        }
+      ],
+      "saved": true
+    },
+    "assignment": {
+      "nativeOptional": [
+        {
+          "name": "agreement_reference",
+          "required": false,
+          "empty": true,
+          "label": "Agreement reference (optional)"
+        }
+      ],
+      "saved": true,
+      "generatedReference": "RA-d572b5f6-6be2-44ed-8350-21ef07961fd9"
+    },
+    "renewal": {
+      "nativeOptional": [
+        {
+          "name": "agreement_reference",
+          "required": false,
+          "empty": true,
+          "label": "New agreement reference (optional)"
+        }
+      ],
+      "saved": true,
+      "generatedReference": "RA-362d1ca4-f6f7-4b03-a2e1-f4c4d8db4e7b"
+    },
+    "unified": {
+      "nativeOptional": [
+        {
+          "name": "businesses[new-1][permitted_goods]",
+          "required": false,
+          "empty": true,
+          "label": "Permitted goods or services (optional)"
+        },
+        {
+          "name": "businesses[new-1][permit_reference]",
+          "required": false,
+          "empty": true,
+          "label": "Permit reference (optional)"
+        },
+        {
+          "name": "businesses[new-1][registration_reference]",
+          "required": false,
+          "empty": true,
+          "label": "Registration reference (optional)"
+        }
+      ],
+      "assignment": "TRAIN-O2",
+      "confirmed": true
+    }
+  },
+  "errors": [],
+  "unexpectedResponses": []
+}

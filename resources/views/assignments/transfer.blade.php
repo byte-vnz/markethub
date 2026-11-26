@@ -36,8 +36,9 @@
     <label for="end">New end date (optional)</label>
     <input id="end" type="date" name="end_date" value="{{ old('end_date') }}">
     @include('assignments.billing-terms')
-    <label for="reference">New agreement reference</label>
-    <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" required>
+    <label for="reference">New agreement reference (optional)</label>
+    <input id="reference" name="agreement_reference" value="{{ old('agreement_reference') }}" maxlength="120" aria-describedby="reference-hint">
+    <p id="reference-hint" class="text-sm text-slate-600 mt-1">Leave blank to generate an internal agreement reference.</p>
     <label for="reason">Transfer or renewal reason</label>
     <textarea id="reason" name="reason" minlength="5" maxlength="1000" required>{{ old('reason') }}</textarea>
     @include('assignments.concurrency')

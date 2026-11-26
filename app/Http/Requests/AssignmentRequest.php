@@ -15,9 +15,9 @@ class AssignmentRequest extends FormRequest
             "rental_rate_id" => "prohibited",
             "start_date" => "required|date_format:Y-m-d",
             "end_date" => "nullable|date_format:Y-m-d",
-            "agreement_reference" => "required|string|max:120",
+            "agreement_reference" => "nullable|string|max:120",
             "remarks" => "nullable|string|max:2000",
-            "concurrent_authorization_reference" => "nullable|required_with:concurrent_authorization_reason|string|max:120",
+            "concurrent_authorization_reference" => "nullable|string|max:120",
             "concurrent_authorization_reason" => "nullable|required_with:concurrent_authorization_reference|string|min:5|max:1000",
         ];
         return $rules + self::billingTermsRules() + ($this->routeIs("assignments.transfer")

@@ -40,6 +40,9 @@ class LeaseContractService
                 );
                 return $existing;
             }
+            $template = ContractTemplate::findOrFail($d['contract_template_id']);
+            $this->check($template->source_checksum === ContractTemplateService::V04_SHA256,
+                'New contract drafts require the reviewed v04 template.');
             $this->eligible($a, $d["start_date"], $d["end_date"]);
             $agreement = $a->agreement;
             $this->check($agreement && $agreement->assessment,
@@ -184,8 +187,14 @@ class LeaseContractService
                 "stall_code" => $assessment->stall_code,
                 "stall_category" => $assessment->basis["stall_section_name"] . " / " .
                     $assessment->business_category_name . " / " . ucfirst($assessment->location_type),
+                "stall_location" => ucfirst($assessment->location_type),
                 "lease_period" => $c->start_date . " – " . $c->end_date,
-                "permitted_goods" => $c->permitted_goods,
+                "permitted_goods" => $template->source_checksum === ContractTemplateService::V04_SHA256
+                    ? trim(implode(' / ', array_filter([
+                        $assessment->snapshot['business']['line_of_business'] ?? null,
+                        $c->permitted_goods,
+                    ], function ($value) { return $value !== null && trim((string) $value) !== ''; })))
+                    : $c->permitted_goods,
                 "billing_basis" => $assessment->period . " reference month, " . $c->billing_days .
                     " " . $dayRule . ", base rental plus CUSA",
                 "rental_assessment_id" => $assessment->id,

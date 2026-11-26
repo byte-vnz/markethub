@@ -1,5 +1,13 @@
 # Documentation revisions
 
+## Version 1.6 — 2026-11-26
+
+Updated the lease template registration and draft instructions for the private v04 source. Documented the retained v02 history, visual approval gate, invalid sample lease date, Inner/Corner terminology and pending Word comparison. Existing training screenshots remain illustrations of the workflow; new v04 page fidelity is not claimed.
+
+## Version 1.5 — 2026-11-26
+
+Documented optional permitted goods and services, optional tenant and business reference fields, and generated internal agreement references on assignment and renewal. Explained the reason and policy checks for concurrent occupancy and the verified goods or services needed for a monthly lease draft.
+
 ## Version 1.4 — 2026-11-26
 
 Added optional fixed-day assignment, renewal, period calculation and bill generation instructions. Documented record-only CUSA and the continued monthly policy, lease and override requirements. Included an illustrative fixed-day exercise and updated the affected workflow diagrams.

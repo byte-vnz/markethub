@@ -127,4 +127,7 @@ return [
     "tenants--68-fixed-day-preview" => base_path("docs/user-manual/screenshots/tenants/68-fixed-day-preview.png"),
     "payments--69-fixed-day-generation" => base_path("docs/user-manual/screenshots/payments/69-fixed-day-generation.png"),
     "payments--70-fixed-day-bill" => base_path("docs/user-manual/screenshots/payments/70-fixed-day-bill.png"),
+    "stalls--71-optional-agreement-reference" => base_path("docs/user-manual/screenshots/stalls/71-optional-agreement-reference.png"),
+    "tenants--72-optional-business-details" => base_path("docs/user-manual/screenshots/tenants/72-optional-business-details.png"),
+    "contracts--73-optional-renewal-reference" => base_path("docs/user-manual/screenshots/contracts/73-optional-renewal-reference.png"),
 ];

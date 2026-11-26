@@ -41,3 +41,22 @@ The separate in-memory Help check passed one test and 46 assertions. Each of the
 
 DOCX rendering was attempted with the bundled renderer. The host could not locate LibreOffice `soffice.exe` and returned a secondary temporary-folder cleanup error. Word layout and pagination review remain pending, as does official LGU review. The Laravel preview used disposable SQLite only and was removed after capture.
 
+## Optional assignment information v1.5
+Chrome 152 used a guarded preview and fictional records. The business form saved with blank permitted goods or services, permit reference and registration reference. The standalone assignment and same-stall renewal each saved a different generated agreement reference. Unified registration confirmed an assignment with those optional fields blank. The browser recorded 12 viewport checks with zero console errors or unexpected HTTP responses. Figures 71–73 show the reviewed assignment, business and renewal forms.
+
+The source cross-check passed with 14 chapters, 50 permission rows across six roles, 20 reports, 72 application captures and 12 workflows. The builder self-check passed. See [browser evidence](verification/optional-assignment-browser-evidence.json) and [source cross-check](verification/source-cross-check.json).
+
+The rebuilt exports include a 98-page manual PDF, six-page quick reference and editable DOCX. The two PDFs have zero print-bound issues. All contact sheets and representative expanded pages were reviewed, including the three new figures. The DOCX archive and XML, 14 contents anchors and footer page field passed structural checks. The 119-entry source archive passed CRC and byte comparison.
+
+A separate in-memory Help publication check passed one test and 43 assertions. Each actual download returned the configured file, MIME type, attachment disposition and content length to the authorized reader. Guests were redirected to sign in. The check covered the v1.5 Help pages, assignment workflow image and all three new allowlisted screenshots.
+
+The bundled Word renderer could not find LibreOffice `soffice.exe` and encountered a secondary Windows temporary-directory cleanup error. Native Word layout and pagination review remain pending.
+
+## v04 lease source v1.6
+
+The 26 November v1.6 export includes the v04 registration and draft instructions. The builder self-check passed; the 98-page PDF manual and six-page quick reference reported no print-bound issues. The DOCX package built from the same sources. The 119-entry source archive passed CRC and source-byte comparison. Existing contract screenshots predate this v04 source change and remain workflow illustrations; no visual claim is made about the generated v04 pages.
+
+The synthetic sample `.qa/v04/sample-contract-synthetic.docx` was generated from a private prepared v04 copy on disposable SQLite. Package verification found all 19 DOCX parts, identical non-document parts, 221 paragraphs, all 24 section headings and unchanged legal paragraphs, with no unresolved placeholders. Word/LibreOffice rendering, exact nine-page comparison, authorized legal review and live approval remain pending. The source's invalid sample date, Inner/Corner versus Inner/Outer terminology, and CUSA/weekly collection wording require authorized review. No live database or migration was touched.
+
+
+The final application suite passed 284 tests and 2,270 assertions on PHP 8.2.12 with in-memory SQLite. Its lease regression covers rejection of a legal draft when the saved assessment lacks verified goods or services. The best-effort PHP 7.4 scan passed 323 files. Native PHP 7.4 and MySQL remain unverified for this change.

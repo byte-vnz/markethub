@@ -2,6 +2,7 @@
 @section('title','Create Lease Contract Draft')
 @section('subtitle','The draft uses the selected assignment’s frozen category, permitted goods and rental basis.')
 @section('content')
+<p class="notice">Active template for new drafts: v04. Register and approve its private working copy before creating a draft. The source's Inner/Corner label and sample lease dates require authorized visual review.</p>
 @if($templates->isEmpty())<div class="notice error">An authorized template manager must register and approve the supplied DOCX.</div>@endif
 @if($hasFixedDayAssignments)<div class="notice">The approved monthly template is unavailable for fixed-day agreements.</div>@endif
 @if($assignments->isEmpty())<div class="notice">An active monthly assignment with an approved rental assessment is required.</div>@endif

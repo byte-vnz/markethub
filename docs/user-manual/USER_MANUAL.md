@@ -4,7 +4,7 @@
 
 # Complete User Manual
 
-**Operational reference v1.4 — prepared for LGU review**
+**Operational reference v1.6 — prepared for LGU review**
 
 **Preparation date:** 26 November 2026
 
@@ -18,6 +18,7 @@ Screenshots show the actual application using synthetic records in an isolated d
 
 | Revision | Date | Description | Approval status |
 | --- | --- | --- | --- |
+| 1.5 | 2026-11-26 | Optional assignment information and automatic agreement references | LGU review pending |
 | 1.4 | 2026-11-26 | Optional fixed-day assignments and separate billing periods | LGU review pending |
 | 1.3 | 2026-11-20 | Keyboard navigation, form recovery, scrollable tables and contract confirmations | LGU review pending |
 | 1.2 | 2026-11-19 | Market Sections and assignment-specific rental overrides | LGU review pending |
@@ -411,13 +412,13 @@ Open **Management → Tenant Management → Register tenant**. Use the seven sec
 
 1. **Personal:** enter verified last and first names, middle name/initial where supplied, civil status, gender, citizenship, residential address and contact information.
 2. **Identification:** enter previous and present account numbers as text, preserving leading zeroes. Record verified government-ID information and issuance details or a documented exception where supported.
-3. **Businesses:** add one or more businesses under the same tenant. Select an active business category and enter applicable trade, permitted goods/services, permit and registration details. A commercial name is optional for an individual stallholder.
-4. **Stall selections.** For each intended assignment choose the business and eligible classified stall. Enter the start date, optional end date and unique agreement reference. If fixed-day fields are available, check the suggested billing interval and enter any daily CUSA you need to keep for reference. Stall location and area come from Stall Management. Check additional-occupancy authority before proceeding. Use verified permitted goods/services of 1–180 characters for any business selected for a new assessment.
+3. **Businesses.** Add one or more businesses under the same tenant. Select an active business category for a business that will use a stall. Enter trade information, permitted goods or services, permit reference and registration reference when available. Staff can confirm an otherwise eligible assignment with these reference fields and the permitted goods or services blank.
+4. **Stall selections.** For each intended assignment choose the business and an eligible classified stall. Enter the start date and any end date. Registration generates the agreement reference. If fixed-day fields are available, check the suggested interval and enter optional daily CUSA for the record. For additional occupancy, enter the reason and provide the authorization reference if available. Effective policy approval is still required.
 5. **Rental preview.** Verify the category, stall area and location, approved minimum and maximum, applied daily rate and billing basis. In a fixed-day preview, verify the selected day count, base rent payable and any record-only CUSA. See Chapter 7 for the calculation.
 6. **Helpers:** enter up to two helpers for each pending assignment.
 7. **Review:** select **Save draft** if more evidence or assignment authority is needed. Select **Confirm registration** after review if authorized. This saves the tenant and any submitted assignments together. Contracts are prepared separately.
 
-**Expected response:** **“Registration draft saved.”** or **“Tenant saved.”** A reference is generated when absent, and structured names display as `LAST NAME, FIRST NAME, M.I.`. **Validation:** drafts keep pending selections without reserving a stall. Confirmation rechecks ownership, eligibility, authority and calculation. A failed confirmation rolls back the related save. The next officer can use **Resume registration** and recheck eligibility. **Common mistakes:** assuming a preview guarantees availability, or attempting to confirm a draft with pending assignments while signed in as Market Staff.
+**Expected response:** **“Registration draft saved.”** or **“Tenant saved.”** A blank tenant reference is generated on creation. Structured names display as `LAST NAME, FIRST NAME, M.I.`. **Validation:** drafts keep pending selections without reserving a stall. Confirmation rechecks ownership, eligibility, authority and calculation. A failed confirmation rolls back the related save. The next officer can use **Resume registration** and recheck eligibility. **Common mistakes:** assuming a preview guarantees availability, or attempting to confirm a draft with pending assignments while signed in as Market Staff.
 
 After a server validation error, read **Please check the following** and follow an error link to its field when a link appears. Review messages without links in the relevant section or resolve the record or permission issue they describe. Re-enter any protected ID value required for the correction before resubmitting.
 
@@ -447,7 +448,7 @@ Figure 08. Validation feedback from the isolated demonstration.
 
 | Field / group | Required to save | Format and validation / treatment |
 | --- | --- | --- |
-| Reference | Generated for new form | Unique text, at most 60; generated `T-` plus UUID if absent; legacy reference retained. |
+| Reference | No | Unique text up to 60 characters when supplied. A new profile gets a `T-` reference if blank. Leaving the field blank on edit preserves the saved reference. |
 | Last name; first name | Yes on new profile | Text, each at most 100; supplying either structured field requires both. |
 | Legacy full name | Retained | Existing unsplit name is preserved when both structured fields remain blank; max 255 if explicitly supplied. |
 | Middle name; middle initial | No | Text max 100 / 10; initial normalized with period; formatted full name max 255. |
@@ -493,11 +494,15 @@ Figure 51. Fictional tenant profile and its tabs as seen by the training adminis
 3. End any active assignments for that business before archiving it. Business ownership is fixed through ordinary editing.
 4. In **Edit tenant**, select the correct existing assignment in the Helpers section. Record up to two verified names, relationship/contact details, status and remarks. Confirm the saved records in **Authorized Helpers**.
 
-Enter 1–180 characters of verified permitted goods/services before a new assessment so the information fits the original contract field. Business details can be completed in a draft before an assignment is confirmed. When relevant business details change after assessment, an authorized renewal captures the updated trade and rental basis for a future contract. Each helper belongs to one assignment. Only authorized helpers enter a contract snapshot.
+Permitted goods or services and business permit and registration references are optional for an assignment. A supported monthly lease draft still needs 1–180 characters of verified goods or services in the frozen assessment. If staff originally assigned the stall with this field blank, record the verified details on the business and complete an eligible renewal to capture them for the future lease. The original assessment remains part of the record. Each helper belongs to one assignment. Only authorized helpers enter a contract snapshot.
 
 ![Tenant Businesses tab](screenshots/tenants/52-business-tab.jpg)
 
 Figure 52. Businesses linked to the fictional tenant from the profile.
+
+![Business registration showing optional goods, permit and registration fields](screenshots/tenants/72-optional-business-details.png)
+
+Figure 72. Fictional business registration with an active category and blank permitted goods or services, permit reference and registration reference.
 
 ![Tenant registration workflow](workflows/03-tenant.png)
 
@@ -539,7 +544,7 @@ Attendance-sheet time/signature fields remain attendance-only; there is no atten
 
 1. With MA or SA, open **Management → Stall Assignments → Assign a tenant**, or confirm the pending selections in unified registration.
 2. Choose an eligible vacant/reserved stall, active tenant and the tenant’s active business with an active category.
-3. Enter the start date, optional end date, unique agreement reference and remarks. If available, choose a **Billing interval (days)** of 1 to 366. The installation suggests seven days unless MIS has configured a different default. Enter **Daily CUSA for records only (PHP)** when applicable. If the assignment adds concurrent occupancy, enter the authorization reference and reason. On the proposed start date, the effective policy of every involved market must permit the tenant’s total concurrent assignments across markets.
+3. Enter the start date and any end date or remarks. You can supply a unique **Agreement reference** or leave it blank to generate an internal `RA-` reference. If available, choose a **Billing interval (days)** of 1 to 366. The installation suggests seven days unless MIS configures a different default. Enter **Daily CUSA for records only (PHP)** when applicable. If the assignment adds concurrent occupancy, enter the reason and an authorization reference if available. On the proposed start date, the effective policy of every involved market must permit the tenant’s total concurrent assignments.
 4. Save. Inspect the agreement under the profile’s **Stall Assignments** and **Rental Information** tabs. Check the stall’s occupied status on the map.
 
 **Expected response:** the application saves the assignment, agreement and immutable rental assessment together. **Validation:** active market and section, eligible dates, no conflicting occupancy, verified Inner or Outer classification, positive area and an effective approved category rate are required. Monthly assessments and concurrent occupancy additionally require an effective approved market policy. Pending choices can stay in a registration draft while awaiting approvals. **Common mistake:** assuming that a policy for one market allows the tenant to exceed another involved market’s limit.
@@ -565,7 +570,11 @@ Figure 27. Stall assignment form for an existing tenant in the monthly training 
 
 ![Stall assignment form with seven billing days and daily CUSA](screenshots/stalls/67-fixed-day-assignment.png)
 
-Figure 67. Fictional assignment form showing a seven-day interval and PHP 10.00 daily CUSA for records.
+Figure 67. Fixed-day billing training example from v1.4, showing a seven-day interval and PHP 10.00 daily CUSA for records.
+
+![Assignment form showing an optional agreement reference and authorization reference](screenshots/stalls/71-optional-agreement-reference.png)
+
+Figure 71. Fictional assignment form. A blank agreement reference generates an internal reference on save. Concurrent occupancy still requires a reason and approved capacity.
 
 ![Assignment workflow](workflows/04-stall-assignment.png)
 
@@ -573,7 +582,7 @@ Figure W04. Stall assignment, authority checks and the frozen rental assessment.
 
 ### 7.2 Register and approve a template
 
-Only an officer with the separate template permissions can perform this task. The application uses the unchanged private `v02_San_Pedro_Public_Market_Lease_Template.docx`; it does not accept an arbitrary replacement through this form.
+Only an officer with the separate template permissions can perform this task. New drafts use the unchanged private `v04_San_Pedro_Public_Market_Lease_Template.docx`; the earlier v02 source and issued files remain for history. Registration prepares a separate working copy. Authorized staff must inspect all nine pages and resolve the source's invalid sample date and `INNER/CORNER` label against the application's `Inner/Outer` classification before approving v04. The form does not accept an arbitrary uploaded replacement.
 
 1. Open **Settings → Contract Templates**.
 2. Enter a unique version and descriptive name; register a private working copy.
@@ -590,7 +599,7 @@ Figure 14. Template registry; the training screen does not grant legal or policy
 ### 7.3 Create and calculate a lease draft
 
 1. Open **Management → Lease Contracts** and select the create-draft action. You can also select **Prepare lease contract** from the active tenant’s **Lease Contracts** tab to show only assignments for that tenant.
-2. Select an active monthly assessed assignment and an approved template version. For a legacy assignment, use an authorized monthly renewal with an eligible business, category and policy before creating a new assessed contract. Fixed-day assignments need a separately approved compatible contract workflow.
+2. Select an active monthly assessed assignment and the approved v04 template version. The assessment must contain 1–180 characters of verified permitted goods or services. If the saved assessment lacks this information or the business details have changed, record the verified current details and use an eligible monthly renewal before creating the draft. A legacy assignment also needs an eligible monthly renewal. Fixed-day assignments need a separately approved compatible contract workflow.
 3. Enter effectivity, expiration and execution dates. Contract dates must fall within the assignment.
 4. Select **Save draft**. Review the permitted goods, location, area, applied rate, billing days, base rent, CUSA and initial advance/deposit breakdown. The effectivity month is the contract’s reference billing period.
 
@@ -646,7 +655,7 @@ Figure 66. The termination confirmation names the selected action. This fictiona
 
 1. Review existing bills and dates before changing occupancy.
 2. For ending, open **Stall Assignments**, enter an eligible end date no later than today and a reason of at least five characters.
-3. For transfer/renewal, open **Transfer / renew** and choose the destination stall, using the same stall for renewal. Choose the tenant’s eligible business, enter a unique new agreement reference and new start/end dates, and supply any required concurrent-occupancy authority. The new term takes a fresh assessment.
+3. For transfer or renewal, open **Transfer / renew** and choose the destination stall. Use the same stall for renewal. Choose the tenant’s eligible business, enter the new dates and provide the transfer or renewal reason. The application generates an internal agreement reference if the reference field is blank. If the new term adds concurrent occupancy, supply its authorization reason and check approved capacity in each involved market. The new term takes a fresh assessment.
 4. Choose a start after the original start and no later than today. For an original monthly assignment, use the first day of a month. For an original fixed-day assignment, choose a date aligned to the original assignment start and saved period length. If MIS has disabled fixed-day entry and the renewal will be monthly, the date must also be the first day of a month. The previous assignment ends on the preceding day. If fixed-day entry is available, review the interval and record-only CUSA for the new term.
 5. Confirm that old history remains and the new agreement is separate. Prepare any new legal contract through its own reviewed workflow.
 
@@ -654,7 +663,11 @@ Figure 66. The termination confirmation names the selected action. This fictiona
 
 ![Transfer or renewal form](screenshots/contracts/39-renew-transfer.png)
 
-Figure 39. Actual transfer/renewal form; future renewal is not claimed as submitted.
+Figure 39. Earlier monthly transfer and renewal example showing the date controls.
+
+![Renewal form showing an optional new agreement reference](screenshots/contracts/73-optional-renewal-reference.png)
+
+Figure 73. Fictional same-stall renewal on an eligible fixed-day boundary with the new agreement reference field blank.
 
 ![Voided contract history](screenshots/contracts/40-void-history.png)
 
@@ -1058,7 +1071,7 @@ Figure L06. Actual responsive navigation; available links vary by role, and this
 **Responsible:** MS, MA or SA. **Prerequisites:** fictional identity and business details. **Menu:** Management → Tenant Management → Register tenant.
 
 1. Enter last name **Training**, first name **Elena**, middle initial **M.**, fictional address/contact and identification for this isolated exercise.
-2. Add the associated **Vegetables** business and record its permitted goods before the assessment.
+2. Add the associated **Vegetables** business. This exercise includes verified permitted goods because a later step prepares a lease.
 3. Save the registration draft while the stall selection and approval checks are pending. If the tenant already exists, open that profile and use its **Businesses** tab.
 
 **Input:** verified training details from Chapter 6. **Expected:** a generated tenant reference and reviewable draft/profile. **Validation:** missing structured names and invalid email are rejected. **Common mistake:** creating a second tenant to register another business. **Next:** inspect stall availability.
@@ -1084,7 +1097,7 @@ Figure L08. Actual map/detail screen; occupancy colors are separate from payment
 
 **Responsible:** MA or SA. **Prerequisites:** eligible stall and effective authority for the business category and market policy. **Menu:** Tenant Management → Resume registration; alternatively Stall Assignments → Assign a tenant for a confirmed tenant.
 
-1. Select **TRAIN-A-001** for Elena’s Vegetables business. Enter **2026-11-01** start, **2027-01-31** end and the unique training agreement reference.
+1. Select **TRAIN-A-001** for Elena’s Vegetables business. Enter **2026-11-01** start and **2027-01-31** end. The earlier exercise uses a unique training agreement reference. The current form generates an internal reference if the field is blank.
 2. Review the preview showing the Outer rate and November rent plus CUSA of **8,364.00**. Record up to two assignment helpers where applicable.
 3. Select **Confirm registration** and review the resulting profile, assessment and occupied status.
 
@@ -1197,7 +1210,7 @@ Figure L16. The assessed November statement shows PHP 8,364.00 billed, PHP 2,000
 2. Renew through a separate same-stall assignment/agreement, or terminate/void the document with a specific reason and separately end occupancy.
 3. A future renewal must wait until its eligible start date. Figure 40 shows a reasoned void and retained original in a prior isolated training case.
 
-**Input:** eligible business and stall, dates, new agreement reference or closure reason. **Expected:** retained old history and separate new history, or controlled closure. **Validation:** first-of-month transfers, no future start, later/full-month bill checks and contract reason minimum. **Common mistake:** claiming a future or policy-gated path was demonstrated. **Next:** inspect availability after actual ending.
+**Input:** eligible business and stall, dates, any new agreement reference provided, or the closure reason. **Expected:** retained old history and separate new history, or controlled closure. **Validation:** this monthly example checks first-of-month transfers, future starts, saved bill coverage and the contract reason minimum. **Next:** inspect availability after actual ending.
 
 ![Lifecycle renewal form](screenshots/contracts/39-renew-transfer.png)
 
@@ -1275,10 +1288,10 @@ When the dates are eligible, generate a draft for 1 through 7 November and a sep
 | Duplicate stall | Search the correct market/code. Edit the existing stall if appropriate; do not add punctuation to evade uniqueness. |
 | Suspected duplicate tenant | Search name/reference/account/phone and verify identity. Duplicate account numbers or names alone are not proof; no automated merge is provided. |
 | Rate or policy cannot be approved | Verify current draft terms, official reference, effective dates and overlapping approved revisions. If the draft changed, reopen and review it before approval. |
-| Cannot assign stall | Check active tenant and owner-linked active business/category, vacant/reserved status, verified Inner/Outer and area, effective approved rate and policy, permitted start and global concurrency authority. Keep pending registration choices in draft while resolving missing evidence. |
+| Cannot assign stall | Check the active tenant and linked active business/category, stall status, verified Inner/Outer and area, approved category rate and dates. Check effective market policy where required. For concurrent occupancy, enter the reason and verify approved capacity in every involved market. |
 | Tenant cannot be archived | End active assignments through the authorized workflow first. Do not erase the tenant or relabel occupancy. |
 | No approved template | Authorized template manager registers the preserved source, obtains real visual review and records approval. Do not invent approval references. |
-| Contract generation fails | Check structured names, address/phone, ID/issuance details, supported civil status, template effective date and checksum. Report integrity errors to MIS. |
+| Lease draft or generation fails | For a draft, check that the assessment contains verified permitted goods or services and matches the current business details. For generation, check structured names, address/phone, ID, civil status, template date and checksum. |
 | Contract PDF unavailable | Use original DOCX for authorized inspection/printing; MIS must configure/test a compatible local converter. This does not affect report PDF export. |
 | Contract issue fails | Confirm ready document, actual review approval, configured numbering/rental-policy references and current eligible term. Do not bypass gates. |
 | Unexpected contract amount | Compare the assessed area, location, category rate, frozen policy, reference-month days and CUSA. Under calendar billing, different months can have different totals. Refer a stale business or rental basis for authorized renewal. |
@@ -1310,6 +1323,8 @@ When the dates are eligible, generate a draft for 1 through 7 November and a sep
 **Why can two assessed monthly totals differ?** Both use the frozen terms. Under a calendar policy the contract’s reference month and the bill’s month may have different day counts. Check the period on each record.
 
 **Where do I change the fixed-day interval?** Choose the interval on a new assignment or eligible renewal when fixed-day entry is enabled. The original assignment keeps its saved interval, amount basis and bills.
+
+**Can I assign a stall without an agreement reference or a goods description?** Yes. Supply a unique agreement reference if available or leave it blank for the application to generate. Goods or services can be blank for assignment. A later monthly lease draft still needs verified goods or services in its assessment.
 
 **Does this manual establish production readiness?** No. Actual deployment, unsupported-stack risks, MySQL locking/UAT and authorized legal/document visual review remain separate acceptance responsibilities.
 

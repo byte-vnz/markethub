@@ -1,7 +1,7 @@
 <?php
 
 return [
-    "version" => "1.4",
+    "version" => "1.6",
     "updated" => "2026-11-26",
     "manual" => base_path("docs/user-manual/USER_MANUAL.md"),
     "quick" => base_path("docs/user-manual/QUICK_REFERENCE_GUIDE.md"),

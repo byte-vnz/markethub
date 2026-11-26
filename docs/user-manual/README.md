@@ -1,6 +1,8 @@
 # User documentation package
 
-Version 1.4, prepared 26 November 2026 for LGU review. This revision documents optional fixed-day assignments, separate rental bills and record-only CUSA. The package also covers unified registration, rate and policy approvals, monthly assessed rentals, Market Sections and assignment rental overrides. Captures use fictional demonstration records. LGU review is pending.
+Version 1.6, prepared 26 November 2026 for LGU review. This revision explains the private v04 lease source, v04 draft selection and the separate visual approval gate. The package also covers optional tenant, business and assignment information, fixed-day billing, record-only CUSA, unified registration, rate and policy approvals, monthly assessed rentals, Market Sections and rental overrides. Captures use fictional demonstration records. LGU review is pending.
+
+When reassociating an orphan business, supply the target tenant identifier to select its verified owner. Supply the required receipt, payment, financial approval and legal references in their respective workflows.
 
 ## Read and download
 - User Manual source: USER_MANUAL.md (14 chapters, 19-step lifecycle, 50 permission rows, 20 reports).

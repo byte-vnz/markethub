@@ -2,12 +2,17 @@
 namespace App\Services;
 use App\Models\{User, Stall, Tenant, Business, Market, StallAssignment, RentalAgreement, RentalPolicy};
 use Illuminate\Support\Facades\{DB, Validator};
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 class AssignmentService
 {
     public function assign(User $actor, array $data)
     {
         $this->authorize($actor);
+        if (isset($data['agreement_reference']) && is_string($data['agreement_reference'])
+            && trim($data['agreement_reference']) === '') {
+            $data['agreement_reference'] = null;
+        }
         $rules = [
             "stall_id" => "required|integer|exists:stalls,id",
             "tenant_id" => "required|integer|exists:tenants,id",
@@ -15,9 +20,9 @@ class AssignmentService
             "rental_rate_id" => "prohibited",
             "start_date" => "required|date_format:Y-m-d|before_or_equal:today",
             "end_date" => "nullable|date_format:Y-m-d|after_or_equal:start_date",
-            "agreement_reference" => "required|string|max:120|unique:rental_agreements,reference",
+            "agreement_reference" => "nullable|string|max:120|unique:rental_agreements,reference",
             "remarks" => "nullable|string|max:2000",
-            "concurrent_authorization_reference" => "nullable|required_with:concurrent_authorization_reason|string|max:120",
+            "concurrent_authorization_reference" => "nullable|string|max:120",
             "concurrent_authorization_reason" => "nullable|required_with:concurrent_authorization_reference|string|min:5|max:1000",
             "helpers" => "nullable|array|max:2",
         ];
@@ -39,10 +44,6 @@ class AssignmentService
             $business = Business::whereKey($d["business_id"])->lockForUpdate()->firstOrFail();
             $this->check((int) $business->tenant_id === (int) $tenant->id && $business->status === "active",
                 "Business does not belong to this tenant or is inactive.");
-            $goodsLength = mb_strlen(trim((string)$business->permitted_goods));
-            if ($goodsLength < 1 || $goodsLength > 180) {
-                throw ValidationException::withMessages(['business_id'=>'Before confirming an assignment, record verified permitted goods of 1–180 characters in its business record. Incomplete registration can remain a draft.']);
-            }
             $end = $d["end_date"] ?? "9999-12-31";
             $conflict = $this->overlapping($stall->assignments(), $d["start_date"], $end)->lockForUpdate()->exists();
             $this->check(!$conflict, "Assignment dates overlap an existing occupancy.");
@@ -69,7 +70,7 @@ class AssignmentService
             RentalAgreement::create([
                 "stall_assignment_id" => $assignment->id,
                 "rental_assessment_id" => $assessment->id,
-                "reference" => $d["agreement_reference"],
+                "reference" => $d["agreement_reference"] ?? 'RA-'.Str::uuid(),
                 "monthly_amount" => $assessment->total_monthly_rental_cusa,
                 "start_date" => $d["start_date"],
                 "end_date" => $d["end_date"] ?? null,
@@ -111,9 +112,8 @@ class AssignmentService
         if ($other->isEmpty()) {
             return null;
         }
-        $this->check(trim($data["concurrent_authorization_reference"] ?? "") !== "" &&
-            mb_strlen(trim($data["concurrent_authorization_reason"] ?? "")) >= 5,
-            "Supply a reference and reason authorizing the concurrent assignments.");
+        $this->check(mb_strlen(trim($data["concurrent_authorization_reason"] ?? "")) >= 5,
+            "Supply a reason authorizing the concurrent assignments.");
         $calculation = app(RentalCalculationService::class);
         $assignmentPolicy = null;
         foreach ($markets->sort() as $marketId) {

@@ -1,4 +1,5 @@
 # MarketHub development
+Active lease source: private v04, mapped in docs/V04_CONTRACT_UPGRADE.md. Keep v02 and issued originals for history; register and obtain authorized visual approval of a v04 working copy before use. Outer/Corner terminology and the source's invalid sample end date require office review. Never edit the source DOCX.
 Read docs/codex/PROJECT_MEMORY.md, CURRENT_STATE.md, DECISIONS.md and HANDOFF.md before coding. Inspect actual source. Follow docs/MASTER_SPEC.md and preserve completed functionality and user data.
 
 PHP 7.4 syntax; Laravel 8.83; locally compiled Tailwind 3. Use Form Requests, policies, transactions, foreign keys, DECIMAL and exact money arithmetic. Preserve posted financial records; append corrections with reasons. Scheduler never auto-posts bills without configured LGU policy.

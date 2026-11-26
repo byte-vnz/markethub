@@ -10,6 +10,18 @@ use ZipArchive;
 class ContractTemplateService
 {
     const SOURCE_SHA256 = '38eb9c85d161d98a7f32f213efbefa3b810e682b72d1a9d4352a70cc13b014fb';
+    const V04_SHA256 = 'd1963eab708eefc59fcd686b8ad16fe5647bd0a12311f496cb60add7c0f454f0';
+
+    const V04_FIELDS = [
+        8 => 'lessee_full_name', 13 => 'citizenship', 15 => 'residential_address',
+        18 => 'contact_number', 20 => 'government_id_type', 22 => 'government_id_number',
+        25 => 'id_date_place_issued', 27 => 'helper_1', 29 => 'helper_2',
+        33 => 'stall_code', 36 => 'stall_category', 39 => 'floor_area',
+        42 => 'permitted_goods', 45 => 'rental_rate_sqm', 48 => 'daily_rental',
+        50 => 'advance_rental', 52 => 'security_deposit', 54 => 'monthly_rental',
+        57 => 'lease_period', 210 => 'lessor_identity', 211 => 'lessor_id_date_place_issued',
+        212 => 'lessee_full_name', 213 => 'lessee_identity', 214 => 'id_date_place_issued',
+    ];
 
     // Zero-based paragraph locations in the reviewed, immutable v02 source only.
     const FIELDS = [
@@ -26,42 +38,50 @@ class ContractTemplateService
 
     public function prepare(string $sourcePath, string $targetPath): array
     {
-        if (!is_file($sourcePath) || hash_file('sha256', $sourcePath) !== self::SOURCE_SHA256) {
-            throw new RuntimeException('The contract source differs from the reviewed v02 template. Review and map a new version first.');
+        $sourceHash = is_file($sourcePath) ? hash_file('sha256', $sourcePath) : false;
+        if (!in_array($sourceHash, [self::SOURCE_SHA256, self::V04_SHA256], true)) {
+            throw new RuntimeException('The contract source differs from the reviewed v02/v04 templates. Review and map a new version first.');
         }
+        $v04 = $sourceHash === self::V04_SHA256;
+        $fields = $v04 ? self::V04_FIELDS : self::FIELDS;
         $xml = $this->readDocument($sourcePath);
         $this->validateXml($xml);
-        $xml = $this->editParagraphs($xml, function ($paragraph, $index) {
-            if (isset(self::FIELDS[$index])) {
-                return $this->setValue($paragraph, '${'.self::FIELDS[$index].'}');
+        $xml = $this->editParagraphs($xml, function ($paragraph, $index) use ($v04, $fields) {
+            if (isset($fields[$index])) {
+                return $this->setValue($paragraph, '${'.$fields[$index].'}');
             }
             if ($index === 2) {
                 return str_replace('SPPM-2026-11-01-C', '${contract_control_no}', $paragraph);
             }
+            if ($v04 && $index === 40) {
+                preg_match('/<w:pPr>.*?(<w:rPr>.*?<\/w:rPr>).*?<\/w:pPr>/s', $paragraph, $properties);
+                $run = '<w:r>'.($properties[1] ?? '').'<w:t xml:space="preserve">: ${stall_location}</w:t></w:r>';
+                return str_replace('</w:p>', $run.'</w:p>', $paragraph);
+            }
             if ($index === 11) {
                 return $this->setValue($paragraph, '[${civil_single}] Single  [${civil_married}] Married  ${gender}');
             }
-            if ($index === 64) {
+            if ($index === ($v04 ? 61 : 64)) {
                 return str_replace('_____ day of _____________, 2026', '${execution_day} day of ${execution_month}, ${execution_year}', $paragraph);
             }
-            if (in_array($index, [5, 68, 212], true)) {
+            if (in_array($index, $v04 ? [5, 65, 209] : [5, 68, 212], true)) {
                 return str_replace('HON. ART JOSEPH FRANCIS MERCADO', '${lessor_name}', $paragraph);
             }
-            if ($index === 82) {
+            if ($index === ($v04 ? 79 : 82)) {
                 return str_replace(['SPPM-2026', '-11-01-C'], ['${contract_control_no}', ''], $paragraph);
             }
             // Fixed sample notarial years are variable fields, not verified execution facts.
-            if ($index === 207) {
+            if ($index === ($v04 ? 204 : 207)) {
                 return str_replace(', 2026, personally appeared:', ', _____, personally appeared:', $paragraph);
             }
-            if ($index === 223) {
+            if ($index === ($v04 ? 220 : 223)) {
                 return str_replace('Series of 2026.', 'Series of _____.', $paragraph);
             }
             return $paragraph;
         });
         $this->writeCopy($sourcePath, $targetPath, $xml);
         preg_match_all('/\$\{([a-z_0-9]+)\}/', $xml, $matches);
-        return ['source_checksum' => self::SOURCE_SHA256, 'checksum' => hash_file('sha256', $targetPath), 'placeholders' => array_values(array_unique($matches[1]))];
+        return ['source_checksum' => $sourceHash, 'checksum' => hash_file('sha256', $targetPath), 'placeholders' => array_values(array_unique($matches[1]))];
     }
 
     public function readDocument(string $path): string
@@ -91,7 +111,7 @@ class ContractTemplateService
             }
             $xpath = new DOMXPath($document);
             $xpath->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
-            if ($xpath->query('//w:tbl')->length !== 5 || $xpath->query('//w:gridSpan')->length !== 16 || $xpath->query('//w:p')->length !== 224) {
+            if ($xpath->query('//w:tbl')->length !== 5 || $xpath->query('//w:gridSpan')->length !== 16 || !in_array($xpath->query('//w:p')->length, [221, 224], true)) {
                 throw new RuntimeException('The contract document structure differs from the reviewed template.');
             }
         } finally {

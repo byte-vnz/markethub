@@ -86,3 +86,11 @@ Figure31 reuses the actual posted-bill capture shown in Figure16. Figures07/38 r
 | 68 | [Nine-day registration preview showing base rent and recorded CUSA](screenshots/tenants/68-fixed-day-preview.png) | 1440 × 970 |
 | 69 | [Fixed-day generation form with the interval start and due date](screenshots/payments/69-fixed-day-generation.png) | 1440 × 970 |
 | 70 | [Posted 1–7 November bill with coverage and record-only CUSA](screenshots/payments/70-fixed-day-bill.png) | 1440 × 970 |
+
+## Optional assignment information (v1.5)
+
+| Figure | Fictional application capture | Dimensions |
+| --- | --- | --- |
+| 71 | [Stall assignment with optional agreement and authorization references](screenshots/stalls/71-optional-agreement-reference.png) | 1440 × 1060 |
+| 72 | [Business registration with blank optional goods, permit and registration fields](screenshots/tenants/72-optional-business-details.png) | 1440 × 1060 |
+| 73 | [Same-stall renewal with optional new agreement reference](screenshots/contracts/73-optional-renewal-reference.png) | 1440 × 1060 |

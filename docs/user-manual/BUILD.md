@@ -20,7 +20,7 @@ Run from the repository root:
 
 ```powershell
 & $manualPython scripts/build-user-manual.py --self-check
-& $manualPython scripts/build-user-manual.py --version 1.4 --date 2026-11-26
+& $manualPython scripts/build-user-manual.py --version 1.6 --date 2026-11-26
 ```
 
 The self-check uses disposable document fixtures only. It checks Markdown parsing, PDF print bounds, DOCX hyperlink/bookmark XML, and rejection of missing images. It does not connect to any application database.

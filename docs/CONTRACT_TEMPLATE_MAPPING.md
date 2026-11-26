@@ -1,5 +1,7 @@
 # Contract template mapping
 
+This document records the retained v02 mapping. New drafts use the separate [v04 map and review gates](V04_CONTRACT_UPGRADE.md).
+
 The source authority is `storage/app/private/references/v02_San_Pedro_Public_Market_Lease_Template.docx`, SHA-256 `38eb9c85d161d98a7f32f213efbefa3b810e682b72d1a9d4352a70cc13b014fb`. The original is never edited. The prepared version is a private copy. A different checksum requires a reviewed mapping and a new version; it cannot silently reuse this map.
 
 Locations below are zero-based `w:p` positions in `word/document.xml` (including table paragraphs). Actual source inspection found 224 paragraphs, five tables, sixteen `w:gridSpan` merged-cell definitions and a retained logo image. Paragraph indices are safe only because the source checksum is pinned.

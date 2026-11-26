@@ -50,7 +50,7 @@
     <section class="panel mt-5 scroll-mt-4" id="business">
         <h2>Business information</h2>
         <p class="text-sm text-slate-600 mt-2">Add a business for each authorized trade. Individual stallholders can leave the commercial name blank.</p>
-        <p class="text-sm text-slate-600 mt-2">Verify the line of business and permitted goods before confirming a stall. Later trade changes require an authorized renewal to appear in a new lease.</p>
+        <p class="text-sm text-slate-600 mt-2">Permitted goods and business references are optional for stall assignment. A later lease requires verified goods; trade changes require an authorized renewal to appear in a new lease.</p>
         <div class="mt-4" data-businesses>
             @foreach($businesses as $businessKey=>$values)
                 @include('tenants.registration-business', compact('businessKey','values'))

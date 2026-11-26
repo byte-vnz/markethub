@@ -148,3 +148,16 @@ An ordinary fixed-day assignment needs an approved category rate and no market r
 The final disposable SQLite suite passed 277 tests and 2,230 assertions on PHP 8.2.12. Native PHP lint, the best-effort PHP 7.4 compatibility checker and the local asset build passed. See `.qa/fixed-day-billing/phpunit-final.xml` and [the manual verification record](../user-manual/VERIFICATION.md). Target PHP 7.4, MySQL migration and locking, Word rendering and operator rollout remain separate acceptance steps.
 
 The v1.4 Help sources and exports were rebuilt on 26 November. Four fictional fixed-day captures, a 96-page PDF manual, an editable DOCX, a six-page quick reference, 12 workflows and the verified source archive are in `docs/user-manual/`. The separate in-memory Help verification passed 46 assertions on the actual exports and new figures. Browser QA covered draft generation, one explicit posting, responsive layouts and the printed billing report. The preview database was removed after capture.
+
+## Optional assignment information — 2026-11-26
+The approved follow-up accepts blank permitted goods or services and optional agreement references on assignment and renewal. Blank agreement references receive a unique generated `RA-` value. The tenant and business reference behavior is retained. For concurrent occupancy, capture the reason and check policy capacity even when the authorization reference is blank. The monthly lease draft still needs verified goods or services in its saved assessment. This follow-up uses the existing schema and preserves issued documents and financial history.
+
+See the [v1.5 verification record](../user-manual/VERIFICATION.md) for the three fictional figures, export checks and authorization coverage. Target PHP 7.4 runtime, native MySQL and Word layout review remain pending.
+
+The rebuilt v1.5 package is available through authenticated Help. The separate publication test passed one test and 43 assertions for the actual download files and new figures. The fictional browser preview was removed after capture.
+
+The final application suite passed 284 tests and 2,270 assertions on PHP 8.2.12 with forced in-memory SQLite. See `.qa/optional-assignment-fields/phpunit-final.xml`. This follow-up required no schema or environment configuration changes and used only disposable data.
+
+## v04 lease source integration — 2026-11-26
+
+Read `docs/V04_CONTRACT_UPGRADE.md` and `docs/CONTRACT_TEMPLATE_MAPPING.md`. The active source is private v04, registered through a derived working copy. Existing v02 history and originals remain. The sample at `.qa/v04/sample-contract-synthetic.docx` uses fictional data and is not an approved issuance. The forced SQLite suite passed 285 tests and 2,287 assertions; the contract suite passed 24 tests and 102 assertions; v1.6 Help passed 43 assertions. Before rollout, authorized staff must perform page-by-page Word comparison and resolve date, location wording, CUSA and payment-schedule discrepancies. No live template approval, migration, database write or issuance was performed.

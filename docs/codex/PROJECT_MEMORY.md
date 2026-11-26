@@ -94,3 +94,12 @@ The production screenshot identified PHP 8-only parenthesized dynamic class cons
 The user approved separate weekly bills with a configurable interval, record-only CUSA and disposable verification. The switch is off by default. New fixed-day terms default to seven days and freeze the selected interval, exact rental basis and record-only CUSA. A first ordinary assignment needs an effective approved category rate. The existing market-policy authority check still applies to concurrent occupancy. Historical monthly values and approval paths remain authoritative for existing monthly assignments. Fixed-day billing uses complete intervals anchored to the assignment start and explicit posting.
 
 Use [the design](../superpowers/specs/2026-11-25-fixed-day-billing-design.md) and [the operator runbook](../operations/FIXED_DAY_BILLING.md). Live database access, migrations, seeding and activation are outside the prepared change.
+
+## Optional assignment information — 2026-11-26
+Staff can leave permitted goods or services blank when assigning a stall. A supplied agreement reference must stay unique. Blank assignment and renewal references receive a generated internal `RA-` reference. Tenant reference entry and business permit or registration reference entry remain optional. For concurrent occupancy, the authorization reference is optional. The reason, approved capacity in every involved market and occupancy protections still apply.
+
+The existing monthly lease draft needs verified goods or services in its saved assessment. Use a fresh eligible renewal when the assessment is missing these details. Preserve saved business and rental snapshots, issued documents and financial references.
+
+## v04 lease source integration — 2026-11-26
+
+Active private lease source is v04, pinned by checksum. New drafts select approved v04 copies; prior v02 prepared templates and generated originals stay readable. The v04 map uses frozen assessment values and verified tenant/helper identity; the source stays untouched. See `docs/V04_CONTRACT_UPGRADE.md` for map and discrepancies. v04 registration and issuance still require authorized nine-page visual review. No live DB or migration was performed.

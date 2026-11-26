@@ -63,7 +63,8 @@ class LeaseContractController extends Controller
         return view("contracts.create", [
             'assignments' => $monthly,
             'hasFixedDayAssignments' => $fixed->isNotEmpty(),
-            "templates" => ContractTemplate::where("approved", true)->get(),
+            "templates" => ContractTemplate::where("approved", true)
+                ->where('source_checksum', ContractTemplateService::V04_SHA256)->get(),
             "submissionKey" => (string) Str::uuid(),
             "selectedTenant" => $tenantId ? \App\Models\Tenant::findOrFail($tenantId) : null,
         ]);
@@ -151,9 +152,7 @@ class LeaseContractController extends Controller
             "version" => "required|string|max:80|unique:contract_templates,version",
             "name" => "required|string|max:150",
         ]);
-        $source = storage_path(
-            "app/private/references/v02_San_Pedro_Public_Market_Lease_Template.docx",
-        );
+        $source = config('contracts.source_path');
         abort_unless(is_file($source), 422, "The authoritative source DOCX is missing.");
         $path = "private/contract-templates/" . Str::uuid() . ".docx";
         Storage::disk("local")->makeDirectory("private/contract-templates");

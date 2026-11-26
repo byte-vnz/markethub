@@ -93,7 +93,7 @@ class LeaseContractWorkflowTest extends TestCase
         Storage::makeDirectory($this->folder);
         $path = $this->folder . "/template.docx";
         $source = storage_path(
-            "app/private/references/v02_San_Pedro_Public_Market_Lease_Template.docx",
+            "app/private/references/v04_San_Pedro_Public_Market_Lease_Template.docx",
         );
         app(ContractTemplateService::class)->prepare($source, storage_path("app/" . $path));
         $this->template = ContractTemplate::create([
@@ -139,6 +139,85 @@ class LeaseContractWorkflowTest extends TestCase
             "submission_key" => (string) Str::uuid(),
         ];
     }
+    public function test_optional_assignment_goods_do_not_bypass_contract_requirements()
+    {
+        $this->assignment->business->update(['permitted_goods'=>null]);
+        $this->assignment = app(AssignmentService::class)->transfer($this->admin, $this->assignment, [
+            'stall_id'=>$this->assignment->stall_id,'business_id'=>$this->assignment->business_id,
+            'start_date'=>today()->startOfMonth()->toDateString(),'reason'=>'Fictional renewal with optional goods',
+        ]);
+        $this->assertNull($this->assignment->agreement->assessment->snapshot['business']['permitted_goods']);
+        try {
+            app(LeaseContractService::class)->create($this->admin,$this->input());
+            $this->fail('An assignment without verified goods cannot create a legal contract.');
+        } catch (ValidationException $exception) {
+            $this->assertSame('Verify permitted goods of 1 to 180 characters and renew the assignment before creating a contract.',
+                $exception->errors()['contract'][0]);
+        }
+        $this->assertSame(0,LeaseContract::count());
+    }
+
+    public function test_v04_generates_from_a_private_approved_copy_and_retains_v02_history()
+    {
+        $source = config('contracts.source_path');
+        $this->assertSame('v04_San_Pedro_Public_Market_Lease_Template.docx', basename($source));
+        $originalHash = hash_file('sha256', $source);
+        $path = $this->folder.'/v04-working.docx';
+        $meta = app(ContractTemplateService::class)->prepare($source, storage_path('app/'.$path));
+        $this->assertSame(ContractTemplateService::V04_SHA256, $meta['source_checksum']);
+        $this->assertContains('stall_location', $meta['placeholders']);
+        $this->assertContains('monthly_rental', $meta['placeholders']);
+        $template = ContractTemplate::create([
+            'name'=>'Fictional v04 review', 'version'=>'v04-test', 'path'=>$path,
+            'source_checksum'=>$meta['source_checksum'], 'checksum'=>$meta['checksum'],
+            'approved'=>true, 'effective_date'=>'2020-01-01', 'created_by'=>$this->admin->id,
+            'approved_by'=>$this->admin->id, 'approved_at'=>now(),
+            'approval_reference'=>'SYNTHETIC ONLY',
+        ]);
+        $this->actingAs($this->admin)->get(route('contracts.create'))->assertOk()
+            ->assertSee('v04-test');
+        $contract = app(LeaseContractService::class)->create($this->admin,
+            array_replace($this->input(), ['contract_template_id'=>$template->id]));
+        $ready = app(LeaseContractService::class)->generate($this->admin,$contract,
+            ['lessor_name'=>'HON. ART JOSEPH FRANCIS MERCADO']);
+        $xml = app(ContractTemplateService::class)->readDocument(storage_path('app/'.$ready->docx_path));
+        $this->assertStringContainsString($ready->control_number,$xml);
+        $this->assertSame(2, substr_count($xml,$ready->control_number));
+        $this->assertStringContainsString(' (INNER/CORNER)',$xml);
+        $this->assertStringContainsString(': Inner</w:t>',$xml);
+        $this->assertStringContainsString('SECTION 24. DISPUTE RESOLUTION AND VENUE',$xml);
+        $this->assertStringNotContainsString('${',$xml);
+        $this->assertSame($originalHash,hash_file('sha256',$source));
+        $this->assertSame(ContractTemplateService::V04_SHA256,$this->template->source_checksum);
+        $legacySource = storage_path('app/private/references/v02_San_Pedro_Public_Market_Lease_Template.docx');
+        $legacyPrepared = storage_path('app/'.$this->folder.'/v02-working.docx');
+        $legacyMeta = app(ContractTemplateService::class)->prepare($legacySource,$legacyPrepared);
+        $this->assertSame(ContractTemplateService::SOURCE_SHA256,$legacyMeta['source_checksum']);
+        $legacyRendered = storage_path('app/'.$this->folder.'/v02-historical.docx');
+        app(\App\Services\ContractGenerationService::class)->render($legacyPrepared,$ready->snapshot,$legacyRendered);
+        $this->assertStringContainsString($ready->control_number,
+            app(ContractTemplateService::class)->readDocument($legacyRendered));
+        $legacyTemplate = ContractTemplate::create([
+            'name'=>'Historical v02', 'version'=>'v02-history-test',
+            'path'=>$this->folder.'/v02-working.docx', 'source_checksum'=>$legacyMeta['source_checksum'],
+            'checksum'=>$legacyMeta['checksum'], 'created_by'=>$this->admin->id,
+        ]);
+        $this->actingAs($this->admin)->get(route('contracts.create'))->assertOk()
+            ->assertDontSee('v02-history-test');
+        try {
+            app(LeaseContractService::class)->create($this->admin,
+                array_replace($this->input(), ['contract_template_id'=>$legacyTemplate->id]));
+            $this->fail('A new draft selected the historical v02 template.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('contract', $exception->errors());
+        }
+        $sample = base_path('.qa/v04/sample-contract-synthetic.docx');
+        if (!is_dir(dirname($sample))) {
+            mkdir(dirname($sample),0775,true);
+        }
+        $this->assertTrue(copy(storage_path('app/'.$ready->docx_path),$sample));
+    }
+
     private function ready()
     {
         $c = app(LeaseContractService::class)->create($this->admin, $this->input());

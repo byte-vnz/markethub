@@ -234,8 +234,9 @@ class FixedDayBillingTest extends TestCase
         $otherStall = Stall::create(array_replace($this->stall->only([
             'market_id','market_section_id','classification','location_type','area',
         ]), ['code'=>'FIX-2','status'=>'vacant']));
-        $second = $this->assign(['stall_id'=>$otherStall->id,'agreement_reference'=>'FIX-CONCURRENT',
-            'concurrent_authorization_reference'=>'SYNTHETIC ONLY','concurrent_authorization_reason'=>'Fictional occupancy approval']);
+        $second = $this->assign(['stall_id'=>$otherStall->id,'agreement_reference'=>null,
+            'concurrent_authorization_reason'=>'Fictional occupancy approval']);
+        $this->assertNull($second->concurrent_authorization_reference);
         $this->assertNull($first->agreement->assessment->rental_policy_id);
         $assessment = $second->agreement->assessment;
         $this->assertSame($policy->id, (int) $assessment->rental_policy_id);

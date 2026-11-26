@@ -5,11 +5,11 @@ flowchart TD
     N2["Application: Resolve the approved category rate and any required market policy."]
     N1 --> N2
     N2 -->|Validation fails| F2["Unclassified stalls and draft schedules cannot support an assessment."]
-    N3["Assignment manager: Enter eligible dates, agreement reference and fixed interval if available."]
+    N3["Assignment manager: Enter dates. Supply an agreement reference or leave it blank for generation."]
     N2 --> N3
-    N4["Application: Check occupancy conflicts and each involved market’s concurrent limit."]
+    N4["Application: For concurrent occupancy, check the reason and approved limits in each market."]
     N3 --> N4
-    N4 -->|Validation fails| F4["Additional occupancy needs authority for the global count."]
+    N4 -->|Validation fails| F4["Resolve missing reason, authority or conflicting occupancy."]
     N5["Application: Save occupied assignment, agreement and frozen assessment together."]
     N4 --> N5
     N6["Authorized viewer: Verify the stall, assessment and assignment in the map or tenant profile."]
